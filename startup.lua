@@ -5,10 +5,23 @@
 local bridge = peripheral.find("me_bridge")
 if not bridge then error("No me_bridge found. Attach an Advanced Peripherals ME Bridge.") end
 
-local mon = peripheral.find("monitor") or term.current()
-if mon.setTextScale then mon.setTextScale(0.5) end
+local monitorTargets = {}
+for _, name in ipairs(peripheral.getNames()) do
+  if peripheral.getType(name) == "monitor" then
+    local device = peripheral.wrap(name)
+    if device then
+      if device.setTextScale then device.setTextScale(0.5) end
+      monitorTargets[#monitorTargets + 1] = {name = name, device = device}
+    end
+  end
+end
+if #monitorTargets == 0 then
+  monitorTargets[1] = {name = "terminal", device = term.current()}
+end
 
-local VERSION = "2026-06-29.5"
+local mon = monitorTargets[1].device
+
+local VERSION = "2026-06-29.6"
 local STATE_VERSION = 2
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
@@ -174,7 +187,7 @@ end
 
 local usageState = loadState()
 local warningButtons = {}
-local updateButton = nil
+local updateButtons = {}
 local statusMessage = nil
 local statusUntil = 0
 
@@ -188,8 +201,8 @@ local function filteredWarnings(warnings)
   return filtered
 end
 
-local function ignoreWarningAt(x, y)
-  for _, button in ipairs(warningButtons or {}) do
+local function ignoreWarningAt(screen, x, y)
+  for _, button in ipairs(warningButtons[screen] or {}) do
     if y == button.y and x >= button.x and x <= button.x2 then
       usageState.ignored[button.key] = button.name or true
       usageState.tracked[button.key] = nil
@@ -238,11 +251,12 @@ local function runUpdater()
   return true
 end
 
-local function handleTouch(x, y)
+local function handleTouch(screen, x, y)
+  local updateButton = updateButtons[screen]
   if updateButton and y == updateButton.y and x >= updateButton.x and x <= updateButton.x2 then
     return runUpdater()
   end
-  return ignoreWarningAt(x, y)
+  return ignoreWarningAt(screen, x, y)
 end
 
 local function updateUsage(items)
@@ -354,15 +368,18 @@ while true do
   local input = call("getAverageEnergyInput", 0)
   local itemTypeTotal, fluidTypeTotal, itemCellCount, fluidCellCount = typeSlots(cells)
 
-  mon.setBackgroundColor(colors.black)
-  mon.clear()
-  local w, h = mon.getSize()
-  local barW = math.max(12, w - 15)
-  local tileW = math.floor((w - 4) / 3)
+  for _, target in ipairs(monitorTargets) do
+    mon = target.device
+    local screen = target.name
+    mon.setBackgroundColor(colors.black)
+    mon.clear()
+    local w, h = mon.getSize()
+    local barW = math.max(12, w - 15)
+    local tileW = math.floor((w - 4) / 3)
 
   clearLine(1, colors.cyan)
   writeAt(2, 1, "AE2 SYSTEM", colors.black, colors.cyan)
-  updateButton = {x = math.max(1, w - 4), x2 = w, y = 1}
+  updateButtons[screen] = {x = math.max(1, w - 4), x2 = w, y = 1}
   writeAt(w - 4, 1, "UPD", colors.white, colors.blue, 3)
   writeAt(w - 22, 1, textutils.formatTime(os.time(), true) .. " " .. itemTypes .. "I/" .. fluidTypes .. "F", colors.black, colors.cyan, 17)
 
@@ -393,7 +410,7 @@ while true do
 
   local nextY = 18
   if #warnings > 0 then
-    warningButtons = {}
+    warningButtons[screen] = {}
     for i = 1, math.min(#warnings, 3) do
       clearLine(nextY, colors.black)
       local buttonX = math.max(1, w - 5)
@@ -402,11 +419,11 @@ while true do
       writeAt(math.max(1, w - 24), nextY, "-" .. fmt(warnings[i].drop) .. " left " .. fmt(warnings[i].left), colors.yellow, colors.black, 18)
       fillRect(buttonX, nextY, 6, 1, colors.gray)
       writeAt(buttonX + 1, nextY, "IGN", colors.white, colors.gray, 3)
-      warningButtons[#warningButtons + 1] = {x = buttonX, x2 = w, y = nextY, key = warnings[i].key, name = warnings[i].name}
+      warningButtons[screen][#warningButtons[screen] + 1] = {x = buttonX, x2 = w, y = nextY, key = warnings[i].key, name = warnings[i].name}
       nextY = nextY + 1
     end
   else
-    warningButtons = {}
+    warningButtons[screen] = {}
     clearLine(nextY, colors.black)
     writeAt(1, nextY, "Warns after real count drops; resets if you delete " .. STATE_FILE, colors.lightGray, colors.black, w)
     nextY = nextY + 1
@@ -434,15 +451,16 @@ while true do
     writeAt(w - 7, y, fmt(amount), colors.white, colors.black, 8)
     y = y + 1
   end
+  end
 
   local timer = os.startTimer(3)
   while true do
     local event, a, b, c = os.pullEvent()
     if event == "timer" and a == timer then
       break
-    elseif event == "monitor_touch" and handleTouch(b, c) then
+    elseif event == "monitor_touch" and handleTouch(a, b, c) then
       break
-    elseif event == "mouse_click" and handleTouch(b, c) then
+    elseif event == "mouse_click" and handleTouch("terminal", b, c) then
       break
     end
   end

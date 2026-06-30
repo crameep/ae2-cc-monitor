@@ -24,6 +24,12 @@ wget https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua s
 reboot
 ```
 
+## Multiple Monitors
+
+If you build one connected monitor wall, CC:Tweaked exposes it as one big monitor automatically.
+
+If you attach separate monitors, the script renders the same dashboard to every monitor peripheral it can find. `UPD` and `IGN` touch buttons work on the monitor you tap.
+
 ## Depletion Warnings
 
 The monitor stores usage state in `.ae2_usage_state`. It now waits for repeated confirmed drops before warning, because AE snapshots can be noisy while the system is crafting, importing, or moving items.
