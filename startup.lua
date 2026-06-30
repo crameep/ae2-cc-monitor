@@ -25,8 +25,8 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-06-29.12"
-local STATE_VERSION = 5
+local VERSION = "2026-06-29.13"
+local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
 local SAMPLE_SECONDS = 90
@@ -135,21 +135,140 @@ local function shouldWatchItem(key, label)
   return true
 end
 
-local function isUsefulLowStock(key, label, amount)
-  if amount <= 0 or amount > 2048 then return false end
-  local text = string.lower(tostring(label or "") .. " " .. tostring(key or ""))
-  if not shouldWatchItem(key, label) then return false end
-  local needles = {
-    "ingot", "dust", "nugget", "gem", "crystal", "essence", "alloy",
-    "redstone", "lapis", "quartz", "certus", "fluix", "diamond",
-    "emerald", "iron", "gold", "copper", "tin", "lead", "silver",
-    "nickel", "uranium", "coal", "glass", "silicon", "processor",
-    "circuit", "plate", "gear", "rod"
-  }
+local function containsAny(text, needles)
   for _, needle in ipairs(needles) do
     if string.find(text, needle, 1, true) then return true end
   end
   return false
+end
+
+local function atm10StockRule(key, label, amount)
+  if amount <= 0 then return nil end
+  local text = string.lower(tostring(label or "") .. " " .. tostring(key or ""))
+  if not shouldWatchItem(key, label) then return false end
+
+  local rules = {
+    {
+      label = "ATM metals",
+      max = 512,
+      priority = 100,
+      needles = {
+        "allthemodium", "vibranium", "unobtainium", "piglich heart",
+        "patrick star", "atm star", "star shard", "alloy block"
+      }
+    },
+    {
+      label = "ATM alloys",
+      max = 1024,
+      priority = 95,
+      needles = {
+        "vibranium allthemodium", "unobtainium vibranium",
+        "unobtainium allthemodium", "awakened"
+      }
+    },
+    {
+      label = "Mystical tiers",
+      max = 4096,
+      priority = 90,
+      needles = {
+        "inferium", "prudentium", "tertium", "imperium", "supremium",
+        "insanium", "prosperity shard", "soulium", "master infusion crystal"
+      }
+    },
+    {
+      label = "Mekanism chain",
+      max = 2048,
+      priority = 85,
+      needles = {
+        "osmium", "refined obsidian", "refined glowstone", "fluorite",
+        "sulfur", "substrate", "hdpe", "polonium", "plutonium",
+        "pellet antimatter", "antimatter", "fissile", "ultimate control circuit"
+      }
+    },
+    {
+      label = "AE2 crafting",
+      max = 4096,
+      priority = 80,
+      needles = {
+        "certus", "fluix", "sky stone", "charged certus", "quartz glass",
+        "logic processor", "calculation processor", "engineering processor",
+        "printed logic", "printed calculation", "printed engineering",
+        "printed silicon", "annihilation core", "formation core", "singularity"
+      }
+    },
+    {
+      label = "Productive Bees",
+      max = 2048,
+      priority = 75,
+      needles = {
+        "honey treat", "gene sample", "gene", "bee cage",
+        "configurable honeycomb", "honeycomb", "productivity upgrade"
+      }
+    },
+    {
+      label = "Powah",
+      max = 2048,
+      priority = 70,
+      needles = {
+        "uraninite", "dielectric paste", "blazing crystal", "niotic crystal",
+        "spirited crystal", "nitro crystal", "energizing rod", "energizing orb",
+        "capacitor"
+      }
+    },
+    {
+      label = "Occultism",
+      max = 1024,
+      priority = 65,
+      needles = {
+        "iesnium", "spirit attuned", "otherstone", "datura", "chalk",
+        "soul gem", "infused pickaxe", "dark gem"
+      }
+    },
+    {
+      label = "Ars Nouveau",
+      max = 1024,
+      priority = 60,
+      needles = {
+        "source gem", "source jar", "magebloom", "archwood", "wilden horn",
+        "wilden wing", "wilden spike", "blank glyph", "spell parchment"
+      }
+    },
+    {
+      label = "Create",
+      max = 2048,
+      priority = 55,
+      needles = {
+        "andesite alloy", "brass", "precision mechanism", "electron tube",
+        "sturdy sheet", "chromatic compound", "shaft", "cogwheel", "belt connector"
+      }
+    },
+    {
+      label = "Industrial",
+      max = 2048,
+      priority = 50,
+      needles = {
+        "modern industrialization", "stainless steel", "titanium", "tungsten",
+        "platinum", "iridium", "kanthal", "cupronickel", "electrum",
+        "invar", "constantan"
+      }
+    },
+    {
+      label = "Pack utility",
+      max = 512,
+      priority = 45,
+      needles = {
+        "eternal stella", "nether star crux", "dragon egg", "wither skeleton skull",
+        "nether star"
+      }
+    }
+  }
+
+  for _, rule in ipairs(rules) do
+    if amount <= rule.max and containsAny(text, rule.needles) then
+      return rule
+    end
+  end
+  return nil
 end
 
 local function set(fg, bg)
@@ -459,13 +578,17 @@ while true do
       if shouldWatchItem(key, label) then
         top[#top + 1] = {name = label, amount = a}
       end
-      if isUsefulLowStock(key, label, a) then
-        lowStock[#lowStock + 1] = {name = label, amount = a}
+      local stockRule = atm10StockRule(key, label, a)
+      if stockRule then
+        lowStock[#lowStock + 1] = {name = label, amount = a, priority = stockRule.priority, group = stockRule.label}
       end
     end
   end
   table.sort(top, function(a, b) return a.amount > b.amount end)
-  table.sort(lowStock, function(a, b) return a.amount < b.amount end)
+  table.sort(lowStock, function(a, b)
+    if a.priority ~= b.priority then return a.priority > b.priority end
+    return a.amount < b.amount
+  end)
   local warnings, recent = updateUsage(items)
 
   local fluidTypes, fluidAmount = 0, 0
@@ -588,12 +711,12 @@ while true do
   end
 
   clearLine(nextY, colors.lightGray)
-  writeAt(2, nextY, "LOW USEFUL STOCK", colors.black, colors.lightGray)
+  writeAt(2, nextY, "ATM10 WATCH STOCK", colors.black, colors.lightGray)
   nextY = nextY + 1
 
   if #lowStock == 0 then
     clearLine(nextY, colors.black)
-    writeAt(1, nextY, "No common materials under 2k", colors.lightGray, colors.black, w)
+    writeAt(1, nextY, "No watched ATM10 bottlenecks low", colors.lightGray, colors.black, w)
     nextY = nextY + 1
   else
     local lowRows = h < 25 and 3 or 4
