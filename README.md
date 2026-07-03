@@ -36,6 +36,24 @@ The script uses larger monitor text when the attached display has enough room, a
 
 Only true capacity sections use bars. The top stored items list uses plain names and counts so it does not look like another capacity meter. Items without a real stored amount are ignored; stack/pattern `size` is not counted as inventory.
 
+## Bulk Cell Markers
+
+The biggest stored items list shows a `BULK` marker when the script can associate that item with a bulk storage cell. Auto-detection uses the data exposed by Advanced Peripherals `listCells()`, which may not include the stored/partitioned item on every pack version.
+
+For items the bridge cannot prove automatically, create `.ae2_bulk_items` beside `startup.lua` and put one item id or display name per line:
+
+```lua
+edit .ae2_bulk_items
+```
+
+Example contents:
+
+```text
+minecraft:cobblestone
+minecraft:netherrack
+iron ingot
+```
+
 ## Depletion Warnings
 
 The monitor stores usage state in `.ae2_usage_state`. It now waits for repeated confirmed drops before warning, because AE snapshots can be noisy while the system is crafting, importing, or moving items.

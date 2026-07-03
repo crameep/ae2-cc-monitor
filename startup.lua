@@ -25,10 +25,11 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-06-29.13"
+local VERSION = "2026-07-02.1"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
+local BULK_HINTS_FILE = ".ae2_bulk_items"
 local SAMPLE_SECONDS = 90
 local WARMUP_SAMPLES = 3
 local MIN_REAL_DROP = 512
@@ -118,6 +119,107 @@ end
 
 local function itemLabel(item)
   return cleanLabel(item.displayName or item.name or item.id or "unknown")
+end
+
+local function norm(text)
+  text = string.lower(tostring(text or ""))
+  text = string.gsub(text, "^item%.", "")
+  text = string.gsub(text, "^block%.", "")
+  text = string.gsub(text, "^fluid%.", "")
+  text = string.gsub(text, "[_%.]+", " ")
+  text = string.gsub(text, "%s+", " ")
+  text = string.gsub(text, "^%s+", "")
+  text = string.gsub(text, "%s+$", "")
+  return text
+end
+
+local function gatherText(value, depth)
+  depth = depth or 0
+  if depth > 4 then return "" end
+  local tv = type(value)
+  if tv == "string" or tv == "number" or tv == "boolean" then
+    return " " .. tostring(value)
+  elseif tv ~= "table" then
+    return ""
+  end
+
+  local parts = {}
+  for k, v in pairs(value) do
+    parts[#parts + 1] = gatherText(k, depth + 1)
+    parts[#parts + 1] = gatherText(v, depth + 1)
+  end
+  return table.concat(parts, " ")
+end
+
+local function loadBulkHints()
+  local hints = {}
+  if not fs.exists(BULK_HINTS_FILE) then return hints end
+  local h = fs.open(BULK_HINTS_FILE, "r")
+  if not h then return hints end
+  local raw = h.readAll() or ""
+  h.close()
+  for line in string.gmatch(raw, "[^\r\n]+") do
+    line = string.gsub(line, "#.*$", "")
+    line = string.gsub(line, "^%s+", "")
+    line = string.gsub(line, "%s+$", "")
+    if line ~= "" then
+      hints[norm(line)] = true
+      hints[line] = true
+    end
+  end
+  return hints
+end
+
+local function isBulkCell(cell)
+  local text = norm(gatherText(cell))
+  return string.find(text, "bulk", 1, true)
+    or string.find(text, "mega item cell", 1, true)
+    or string.find(text, "mega bulk", 1, true)
+    or string.find(text, "megacells:bulk", 1, true)
+end
+
+local function cellMatchesItem(cellText, item)
+  local key = itemKey(item)
+  local label = itemLabel(item)
+  if key ~= "unknown" and string.find(cellText, norm(key), 1, true) then return true end
+  local name = tostring(item.name or item.id or "")
+  if name ~= "" and string.find(cellText, norm(name), 1, true) then return true end
+  local fingerprint = tostring(item.fingerprint or "")
+  if fingerprint ~= "" and string.find(cellText, norm(fingerprint), 1, true) then return true end
+  if label ~= "unknown" and #label >= 6 and string.find(cellText, norm(label), 1, true) then return true end
+  return false
+end
+
+local function buildBulkIndex(cells, items)
+  local index = {}
+  local bulkCells = 0
+  local matched = 0
+  local hints = loadBulkHints()
+
+  for _, item in pairs(items or {}) do
+    local key = itemKey(item)
+    local label = itemLabel(item)
+    if hints[norm(key)] or hints[key] or hints[norm(label)] then
+      index[key] = "hint"
+      matched = matched + 1
+    end
+  end
+
+  for _, cell in pairs(cells or {}) do
+    if isBulkCell(cell) then
+      bulkCells = bulkCells + 1
+      local text = norm(gatherText(cell))
+      for _, item in pairs(items or {}) do
+        local key = itemKey(item)
+        if not index[key] and cellMatchesItem(text, item) then
+          index[key] = "auto"
+          matched = matched + 1
+        end
+      end
+    end
+  end
+
+  return index, bulkCells, matched
 end
 
 local function shouldWatchItem(key, label)
@@ -566,6 +668,7 @@ while true do
   local tasks = callAny({"getCraftingTasks", "listCraftingTasks"}, {}) or {}
 
   local itemTypes, itemCount = 0, 0
+  local bulkIndex, bulkCellCount, bulkItemMatches = buildBulkIndex(cells, items)
   local top = {}
   local lowStock = {}
   for _, item in pairs(items) do
@@ -576,7 +679,7 @@ while true do
       local label = itemLabel(item)
       local key = itemKey(item)
       if shouldWatchItem(key, label) then
-        top[#top + 1] = {name = label, amount = a}
+        top[#top + 1] = {key = key, name = label, amount = a, bulk = bulkIndex[key]}
       end
       local stockRule = atm10StockRule(key, label, a)
       if stockRule then
@@ -734,7 +837,8 @@ while true do
   if nextY + 2 <= h then
     nextY = nextY + 1
     clearLine(nextY, colors.lightGray)
-    writeAt(2, nextY, "BIGGEST STORED ITEMS", colors.black, colors.lightGray)
+    local bulkTitle = bulkCellCount > 0 and ("BIGGEST STORED ITEMS  BULK " .. bulkItemMatches .. " CELLS " .. bulkCellCount) or "BIGGEST STORED ITEMS"
+    writeAt(2, nextY, bulkTitle, colors.black, colors.lightGray, w - 2)
     nextY = nextY + 1
 
     local y = nextY
@@ -742,12 +846,18 @@ while true do
     for i = 1, math.min(#top, listRows) do
       local amount = top[i].amount
       local amountText = fmt(amount)
+      local marker = top[i].bulk and "BULK" or ""
+      local markerW = marker ~= "" and 5 or 0
       local amountW = math.max(8, #amountText)
-      local nameW = math.max(8, w - amountW - 2)
+      local nameW = math.max(8, w - amountW - markerW - 2)
       local nameColor = colors.white
       if i > 8 then nameColor = colors.lightGray end
       clearLine(y, colors.black)
       writeAt(1, y, string.sub(top[i].name, 1, nameW), nameColor, colors.black, nameW)
+      if marker ~= "" then
+        local markerColor = top[i].bulk == "auto" and colors.lime or colors.cyan
+        writeAt(math.max(1, w - amountW - markerW + 1), y, marker, markerColor, colors.black, markerW)
+      end
       writeAt(w - amountW + 1, y, amountText, colors.white, colors.black, amountW)
       y = y + 1
     end
