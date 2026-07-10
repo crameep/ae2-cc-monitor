@@ -48,6 +48,7 @@ The interface separates dense information into focused pages instead of one long
 - Four-line crafting cards
 - Alternating storage rows
 - A persistent bottom navigation bar
+- A fixed-column low-stock table with compact categories, count/target values, urgency colors, and non-overlapping paging controls
 
 The script starts at monitor text scale `1` and falls back to `0.5` when a display would otherwise be too small for the interface.
 
