@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-09.2"
+local VERSION = "2026-07-09.3"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -45,6 +45,7 @@ local CONSUMED_WATCH = 2048
 local DROP_EVENTS_REQUIRED = 2
 local LOW_STOCK = 4096
 local FAST_DROP = 1024
+local PATTERN_REFRESH_SECONDS = 30
 
 local function call(name, default)
   local f = bridge[name]
@@ -107,6 +108,7 @@ end
 
 local function cleanLabel(text)
   text = tostring(text or "unknown")
+  text = string.gsub(text, "^%[(.-)%]$", "%1")
   text = string.gsub(text, "^item%.", "")
   text = string.gsub(text, "^block%.", "")
   text = string.gsub(text, "^fluid%.", "")
@@ -246,10 +248,20 @@ local function cellMatchesItem(cellText, item)
   return false
 end
 
+local function cellExposesStoredItem(cell)
+  if type(cell) ~= "table" then return false end
+  local keys = {"storedItem", "partition", "partitionedItem", "filter", "config", "contents", "fingerprint"}
+  for _, key in ipairs(keys) do
+    if cell[key] ~= nil then return true end
+  end
+  return false
+end
+
 local function buildBulkIndex(cells, items)
   local index = {}
   local bulkCells = 0
   local matched = 0
+  local autoAvailable = false
   local hints = loadBulkHints()
 
   for _, item in pairs(items or {}) do
@@ -264,18 +276,21 @@ local function buildBulkIndex(cells, items)
   for _, cell in pairs(cells or {}) do
     if isBulkCell(cell) then
       bulkCells = bulkCells + 1
-      local text = norm(gatherText(cell))
-      for _, item in pairs(items or {}) do
-        local key = itemKey(item)
-        if not index[key] and cellMatchesItem(text, item) then
-          index[key] = "auto"
-          matched = matched + 1
+      if cellExposesStoredItem(cell) then
+        autoAvailable = true
+        local cellText = norm(gatherText(cell))
+        for _, item in pairs(items or {}) do
+          local key = itemKey(item)
+          if not index[key] and cellMatchesItem(cellText, item) then
+            index[key] = "auto"
+            matched = matched + 1
+          end
         end
       end
     end
   end
 
-  return index, bulkCells, matched
+  return index, bulkCells, matched, autoAvailable
 end
 
 local function shouldWatchItem(key, label)
@@ -502,6 +517,19 @@ local function typeSlots(cells)
   return itemCells * 63, fluidCells * 63, itemCells, fluidCells
 end
 
+local function cellHealth(cells)
+  local nearFull, empty = 0, 0
+  for _, cell in pairs(cells or {}) do
+    local total = n(cell.bytes or cell.capacity)
+    local used = n(cell.usedBytes or cell.used)
+    if total > 0 then
+      if used <= 0 then empty = empty + 1 end
+      if used / total >= 0.95 then nearFull = nearFull + 1 end
+    end
+  end
+  return nearFull, empty
+end
+
 local function loadState()
   if not fs.exists(STATE_FILE) then return {last = {}, tracked = {}, warnings = {}, ignored = {}, stateVersion = STATE_VERSION, lastSample = 0} end
   local h = fs.open(STATE_FILE, "r")
@@ -539,6 +567,9 @@ local uiButtons = {}
 local currentPages = {}
 local listPages = {}
 local craftHistory = {}
+local stockCraftHistory = {}
+local patternCache = {}
+local patternCacheTime = 0
 local statusMessage = nil
 local statusUntil = 0
 local setStatus
@@ -979,26 +1010,31 @@ local function normalizeTask(task, index)
   local resource = firstField(task, {"resource", "requested", "requestedItem", "output", "finalOutput"}, nil)
   if resource == nil then resource = methodValue(task, {"getRequestedItem", "getFinalOutput"}, nil) end
   local label = type(resource) == "table" and itemLabel(resource) or cleanLabel(resource or ("Crafting Job " .. index))
+  local resourceName = type(resource) == "table" and tostring(resource.name or resource.id or "") or tostring(resource or "")
+  local resourceFingerprint = type(resource) == "table" and tostring(resource.fingerprint or "") or ""
 
   local quantity = n(firstField(task, {"quantity", "total", "totalItems", "count", "amount"}, 0))
   if quantity <= 0 then quantity = n(methodValue(task, {"getTotalItems"}, 0)) end
   if quantity <= 0 and type(resource) == "table" then quantity = amountOf(resource) end
 
-  local crafted = n(firstField(task, {"crafted", "itemProgress", "completed", "done"}, 0))
-  if crafted <= 0 then crafted = n(methodValue(task, {"getItemProgress"}, 0)) end
-
-  local completion = n(firstField(task, {"completion", "percent", "percentage", "progress"}, 0))
+  local rawCrafted = firstField(task, {"crafted", "itemProgress", "completed", "done"}, nil)
+  if rawCrafted == nil and type(task.getItemProgress) == "function" then rawCrafted = methodValue(task, {"getItemProgress"}, nil) end
+  local rawCompletion = firstField(task, {"completion", "percent", "percentage", "progress"}, nil)
+  local progressKnown = rawCrafted ~= nil or rawCompletion ~= nil
+  local crafted = n(rawCrafted)
+  local completion = n(rawCompletion)
   if completion > 1 then completion = completion / 100 end
-  if completion <= 0 and quantity > 0 then completion = crafted / quantity end
+  if progressKnown and completion <= 0 and quantity > 0 then completion = crafted / quantity end
   completion = math.max(0, math.min(1, completion))
-  if crafted <= 0 and quantity > 0 and completion > 0 then
-    crafted = quantity * completion
-  end
+  if progressKnown and crafted <= 0 and quantity > 0 and completion > 0 then crafted = quantity * completion end
 
   local cpu = firstField(task, {"cpu", "craftingCpu", "craftingCPU"}, nil)
   local cpuName = firstField(task, {"cpuName"}, nil)
+  local cpuStorage, cpuCoProcessors = 0, 0
   if type(cpu) == "table" then
-    cpuName = firstField(cpu, {"name", "displayName"}, cpuName)
+    cpuName = firstField(cpu, {"_monitorName", "name", "displayName"}, cpuName)
+    cpuStorage = n(firstField(cpu, {"storage", "bytes"}, 0))
+    cpuCoProcessors = n(firstField(cpu, {"coProcessors", "coprocessors"}, 0))
   elseif type(cpu) == "string" then
     cpuName = cpu
   end
@@ -1025,19 +1061,20 @@ local function normalizeTask(task, index)
   local identity = id
   local numericBridgeId = tonumber(bridgeId)
   if identity == nil and numericBridgeId and numericBridgeId >= 0 then identity = numericBridgeId end
-  local key = tostring(identity or (label .. ":" .. tostring(quantity) .. ":" .. tostring(cpuName)))
+  local key = tostring(identity or (resourceName .. ":" .. tostring(quantity) .. ":" .. tostring(cpuName)))
   local now = nowSeconds()
-  local previous = craftHistory[key]
-  local rate = previous and n(previous.rate) or 0
-  if previous and crafted >= n(previous.crafted) and now > n(previous.time) then
-    local instant = (crafted - n(previous.crafted)) / (now - n(previous.time))
-    if instant > 0 then
-      rate = rate > 0 and ((rate * 0.65) + (instant * 0.35)) or instant
+  local rate = 0
+  if progressKnown then
+    local previous = craftHistory[key]
+    rate = previous and n(previous.rate) or 0
+    if previous and crafted >= n(previous.crafted) and now > n(previous.time) then
+      local instant = (crafted - n(previous.crafted)) / (now - n(previous.time))
+      if instant > 0 then rate = rate > 0 and ((rate * 0.65) + (instant * 0.35)) or instant end
+    elseif not previous and elapsed > 0 and crafted > 0 then
+      rate = crafted / elapsed
     end
-  elseif not previous and elapsed > 0 and crafted > 0 then
-    rate = crafted / elapsed
+    craftHistory[key] = {crafted = crafted, time = now, rate = rate, seen = now}
   end
-  craftHistory[key] = {crafted = crafted, time = now, rate = rate, seen = now}
 
   local remaining = math.max(0, quantity - crafted)
   local eta = rate > 0 and remaining / rate or 0
@@ -1047,10 +1084,15 @@ local function normalizeTask(task, index)
     id = id,
     bridgeId = bridgeId,
     name = label,
+    resourceName = resourceName,
+    resourceFingerprint = resourceFingerprint,
     quantity = quantity,
     crafted = crafted,
     completion = completion,
+    progressKnown = progressKnown,
     cpu = cpuName,
+    cpuStorage = cpuStorage,
+    cpuCoProcessors = cpuCoProcessors,
     usedBytes = usedBytes,
     elapsed = elapsed,
     rate = rate,
@@ -1072,10 +1114,17 @@ local function normalizeCpus(cpus)
     if type(cpu) == "table" then normalized[#normalized + 1] = cpu end
   end
   table.sort(normalized, function(a, b)
-    local an = cleanLabel(firstField(a, {"name", "displayName"}, "Unnamed CPU"))
-    local bn = cleanLabel(firstField(b, {"name", "displayName"}, "Unnamed CPU"))
-    return an < bn
+    local an = cleanLabel(firstField(a, {"name", "displayName"}, "Unnamed"))
+    local bn = cleanLabel(firstField(b, {"name", "displayName"}, "Unnamed"))
+    if an ~= bn then return an < bn end
+    return n(firstField(a, {"storage", "bytes"}, 0)) < n(firstField(b, {"storage", "bytes"}, 0))
   end)
+  for index, cpu in ipairs(normalized) do
+    local rawName = cleanLabel(firstField(cpu, {"name", "displayName"}, "Unnamed"))
+    if string.lower(rawName) == "unnamed" or string.lower(rawName) == "unknown" then rawName = "CPU " .. index end
+    cpu._monitorIndex = index
+    cpu._monitorName = rawName
+  end
   return normalized
 end
 
@@ -1117,6 +1166,95 @@ local function normalizeTasks(tasks, cpus)
     if now - n(history.seen) > 180 then craftHistory[key] = nil end
   end
   return normalized
+end
+
+local function getPatternCache()
+  local now = nowSeconds()
+  if now - patternCacheTime >= PATTERN_REFRESH_SECONDS or next(patternCache) == nil then
+    local fresh = call("getPatterns", nil)
+    if type(fresh) == "table" then
+      patternCache = fresh
+      patternCacheTime = now
+    end
+  end
+  return patternCache
+end
+
+local function patternIndex(patterns)
+  local index = {}
+  for _, pattern in pairs(patterns or {}) do
+    local output = type(pattern) == "table" and pattern.primaryOutput or nil
+    if type(output) == "table" then
+      local name = tostring(output.name or output.id or "")
+      local fingerprint = tostring(output.fingerprint or "")
+      if name ~= "" then index["name:" .. name] = pattern end
+      if fingerprint ~= "" then index["fp:" .. fingerprint] = pattern end
+    end
+  end
+  return index
+end
+
+local function recipeSummary(task, patternsByOutput)
+  local pattern = nil
+  if task.resourceFingerprint ~= "" then pattern = patternsByOutput["fp:" .. task.resourceFingerprint] end
+  if not pattern and task.resourceName ~= "" then pattern = patternsByOutput["name:" .. task.resourceName] end
+  if type(pattern) ~= "table" then return nil end
+  local output = pattern.primaryOutput or {}
+  local outputCount = math.max(1, amountOf(output))
+  local batches = task.quantity > 0 and math.max(1, math.ceil(task.quantity / outputCount)) or 1
+  local parts = {}
+  for _, input in ipairs(pattern.inputs or {}) do
+    local primary = type(input) == "table" and input.primaryInput or nil
+    if type(primary) == "table" then
+      local amount = math.max(1, n(input.multiplier or 1)) * batches
+      parts[#parts + 1] = fmt(amount) .. "x " .. itemLabel(primary)
+    end
+  end
+  if #parts == 0 then return nil end
+  return "Recipe: " .. table.concat(parts, ", ", 1, math.min(3, #parts))
+end
+
+local function enrichTasks(tasks, items, patterns)
+  local amountsByName, amountsByFingerprint = {}, {}
+  for _, item in pairs(items or {}) do
+    local amount = amountOf(item)
+    local name = tostring(item.name or item.id or "")
+    local fingerprint = tostring(item.fingerprint or "")
+    if name ~= "" then amountsByName[name] = n(amountsByName[name]) + amount end
+    if fingerprint ~= "" then amountsByFingerprint[fingerprint] = n(amountsByFingerprint[fingerprint]) + amount end
+  end
+
+  local byOutput = patternIndex(patterns)
+  local now = nowSeconds()
+  for _, task in ipairs(tasks or {}) do
+    task.recipe = recipeSummary(task, byOutput)
+    if not task.progressKnown then
+      local current = task.resourceFingerprint ~= "" and amountsByFingerprint[task.resourceFingerprint] or nil
+      if current == nil then current = amountsByName[task.resourceName] or 0 end
+      local history = stockCraftHistory[task.key]
+      if not history then
+        history = {lastAmount = current, estimated = 0, rate = 0, time = now, seen = now}
+      elseif now > n(history.time) then
+        local delta = current - n(history.lastAmount)
+        if delta > 0 then
+          history.estimated = n(history.estimated) + delta
+          local instant = delta / (now - n(history.time))
+          history.rate = n(history.rate) > 0 and (n(history.rate) * 0.65 + instant * 0.35) or instant
+        end
+        history.lastAmount = current
+        history.time = now
+        history.seen = now
+      end
+      stockCraftHistory[task.key] = history
+      task.estimatedCrafted = n(history.estimated)
+      task.estimatedRate = n(history.rate)
+      task.estimatedEta = task.estimatedRate > 0 and math.max(0, task.quantity - task.estimatedCrafted) / task.estimatedRate or 0
+    end
+  end
+
+  for key, history in pairs(stockCraftHistory) do
+    if now - n(history.seen) > 180 then stockCraftHistory[key] = nil end
+  end
 end
 
 local function centerText(y, text, fg, bg, maxWidth)
@@ -1237,10 +1375,16 @@ local function renderOverview(screen, data, h)
     else
       for i = 1, math.min(#data.tasks, 2) do
         local task = data.tasks[i]
-        local pctText = string.format("%3d%%", math.floor(task.completion * 100 + 0.5))
-        local detail = task.quantity > 0 and (fmt(task.crafted) .. "/" .. fmt(task.quantity)) or "running"
-        writeAt(2, y, task.name, colors.cyan, colors.black, math.max(8, w - #pctText - #detail - 6))
-        writeAt(math.max(1, w - #detail - #pctText - 2), y, detail .. " " .. pctText, colors.white, colors.black)
+        local statusText, detail
+        if task.progressKnown then
+          statusText = string.format("%3d%%", math.floor(task.completion * 100 + 0.5))
+          detail = task.quantity > 0 and (fmt(task.crafted) .. "/" .. fmt(task.quantity)) or "running"
+        else
+          statusText = "RUNNING"
+          detail = n(task.estimatedCrafted) > 0 and ("EST +" .. fmt(task.estimatedCrafted)) or (task.quantity > 0 and ("TARGET " .. fmt(task.quantity)) or "ACTIVE")
+        end
+        writeAt(2, y, task.name, colors.cyan, colors.black, math.max(8, w - #statusText - #detail - 6))
+        writeAt(math.max(1, w - #detail - #statusText - 2), y, detail .. " " .. statusText, colors.white, colors.black)
         y = y + 1
       end
     end
@@ -1281,10 +1425,10 @@ local function renderCrafting(screen, data, h)
   if #data.tasks == 0 then
     if data.busyCpuCount > 0 then
       centerText(math.min(bottom, 7), "CRAFTING DETECTED", colors.cyan, colors.black, w)
-      if math.min(bottom, 9) <= bottom then centerText(math.min(bottom, 9), "CPU busy; this AP build did not expose job details.", colors.lightGray, colors.black, w) end
+      centerText(math.min(bottom, 9), "CPU busy; this bridge did not expose the job object.", colors.lightGray, colors.black, w)
     else
       centerText(math.min(bottom, 7), "NO ACTIVE CRAFTING JOBS", colors.cyan, colors.black, w)
-      if math.min(bottom, 9) <= bottom then centerText(math.min(bottom, 9), "Start a craft from an AE2 terminal to see it here.", colors.lightGray, colors.black, w) end
+      centerText(math.min(bottom, 9), "Start a craft from an AE2 terminal to see it here.", colors.lightGray, colors.black, w)
     end
     local y = 12
     if y <= bottom then
@@ -1293,19 +1437,19 @@ local function renderCrafting(screen, data, h)
       y = y + 1
       for _, cpu in ipairs(data.cpus) do
         if y > bottom then break end
-        local name = cleanLabel(firstField(cpu, {"name", "displayName"}, "Unnamed CPU"))
+        local name = firstField(cpu, {"_monitorName", "name", "displayName"}, "CPU")
         local storage = n(firstField(cpu, {"storage", "bytes"}, 0))
         local co = n(firstField(cpu, {"coProcessors", "coprocessors"}, 0))
         local busy = cpuBusy(cpu)
         writeAt(2, y, name, busy and colors.cyan or colors.white, colors.black, math.max(8, w - 26))
-        writeAt(math.max(1, w - 24), y, (busy and "BUSY" or "IDLE") .. "  " .. fmt(storage) .. "B  " .. co .. " co", busy and colors.cyan or colors.lightGray, colors.black, 24)
+        writeAt(math.max(1, w - 24), y, (busy and "BUSY" or "IDLE") .. "  " .. fmt(storage) .. "B  " .. fmt(co) .. " co", busy and colors.cyan or colors.lightGray, colors.black, 24)
         y = y + 1
       end
     end
     return
   end
 
-  local taskHeight = 4
+  local taskHeight = 5
   local rowsAvailable = math.max(taskHeight, bottom - 3)
   local perPage = math.max(1, math.floor(rowsAvailable / taskHeight))
   local pageCount = math.max(1, math.ceil(#data.tasks / perPage))
@@ -1320,19 +1464,35 @@ local function renderCrafting(screen, data, h)
     local task = data.tasks[i]
     if y + taskHeight - 1 > bottom then break end
     clearLine(y, colors.gray)
-    local pctText = string.format("%3d%%", math.floor(task.completion * 100 + 0.5))
-    writeAt(2, y, task.name, colors.white, colors.gray, math.max(8, w - #pctText - 4))
-    writeAt(math.max(1, w - #pctText), y, pctText, colors.white, colors.gray, #pctText)
-    meter(2, y + 1, math.max(4, w - 2), task.completion, colors.cyan, colors.gray)
+    local statusText = task.progressKnown and string.format("%3d%%", math.floor(task.completion * 100 + 0.5)) or "RUNNING"
+    writeAt(2, y, task.name, colors.white, colors.gray, math.max(8, w - #statusText - 4))
+    writeAt(math.max(1, w - #statusText), y, statusText, colors.white, colors.gray, #statusText)
 
-    local progress = task.quantity > 0 and (fmt(task.crafted) .. " / " .. fmt(task.quantity)) or "Progress data unavailable"
-    local rateEta = task.rate > 0 and (fmtRate(task.rate) .. "  ETA " .. duration(task.eta)) or "rate learning"
+    if task.progressKnown then
+      meter(2, y + 1, math.max(4, w - 2), task.completion, colors.cyan, colors.gray)
+    else
+      clearLine(y + 1, colors.black)
+      writeAt(2, y + 1, "DIRECT PROGRESS NOT EXPOSED - STOCK DELTA ESTIMATE", colors.yellow, colors.black, w - 2)
+    end
+
+    local progress, rateEta
+    if task.progressKnown then
+      progress = task.quantity > 0 and (fmt(task.crafted) .. " / " .. fmt(task.quantity)) or "running"
+      rateEta = task.rate > 0 and (fmtRate(task.rate) .. "  ETA " .. duration(task.eta)) or "rate learning"
+    else
+      progress = task.quantity > 0 and ("Target " .. fmt(task.quantity) .. "  |  EST stock +" .. fmt(task.estimatedCrafted)) or "Running"
+      rateEta = task.estimatedRate > 0 and ("~" .. fmtRate(task.estimatedRate) .. "  ETA~ " .. duration(task.estimatedEta)) or "estimate learning"
+    end
     writeAt(2, y + 2, progress, colors.white, colors.black, math.max(8, w - #rateEta - 4))
     writeAt(math.max(1, w - #rateEta), y + 2, rateEta, colors.lightGray, colors.black, #rateEta)
 
-    local detail = task.subparts or ("CPU " .. task.cpu .. (task.usedBytes > 0 and ("  |  " .. fmt(task.usedBytes) .. " bytes") or ""))
-    if task.debug and not task.subparts then detail = detail .. "  |  " .. cleanLabel(task.debug) end
-    writeAt(2, y + 3, detail, task.subparts and colors.yellow or colors.lightGray, colors.black, w - 2)
+    local cpuDetail = task.cpu
+    if task.cpuStorage > 0 then cpuDetail = cpuDetail .. "  |  " .. fmt(task.cpuStorage) .. " bytes" end
+    if task.cpuCoProcessors > 0 then cpuDetail = cpuDetail .. "  |  " .. fmt(task.cpuCoProcessors) .. " co" end
+    writeAt(2, y + 3, cpuDetail, colors.lightGray, colors.black, w - 2)
+
+    local detail = task.subparts or task.recipe or (task.debug and cleanLabel(task.debug)) or "Recipe inputs unavailable"
+    writeAt(2, y + 4, detail, (task.subparts or task.recipe) and colors.yellow or colors.lightGray, colors.black, w - 2)
     y = y + taskHeight
   end
 end
@@ -1421,7 +1581,8 @@ local function renderStorage(screen, data, h)
   listPages[screen].storage = pageNumber
 
   clearLine(y, colors.black)
-  writeAt(2, y, #data.top .. " stored item types  |  " .. data.bulkItemMatches .. " bulk-marked  |  " .. data.bulkCellCount .. " bulk cells", colors.lightGray, colors.black, math.max(8, w - 24))
+  local bulkText = data.bulkAutoAvailable and (data.bulkItemMatches .. " bulk-marked") or (data.bulkItemMatches .. " manual bulk | auto unavailable")
+  writeAt(2, y, #data.top .. " item types  |  " .. bulkText .. "  |  " .. data.nearFullCellCount .. " cells >95%", colors.lightGray, colors.black, math.max(8, w - 24))
   pageControls(screen, "storage", y, pageNumber, pageCount)
   y = y + 1
 
@@ -1469,8 +1630,8 @@ local function renderSystem(screen, data, h)
   if w >= 42 and y + 2 <= bottom then
     local gap = 1
     local tileW = math.floor((w - (gap * 2)) / 3)
-    tile(1, y, tileW, "CELLS", tostring(data.cellCount), data.itemCellCount .. " item / " .. data.fluidCellCount .. " fluid", colors.green)
-    tile(tileW + gap + 1, y, tileW, "DRIVES", tostring(data.driveCount), data.itemTypes .. " item types", colors.yellow)
+    tile(1, y, tileW, "CELLS", tostring(data.cellCount), data.nearFullCellCount .. " near full / " .. data.emptyCellCount .. " empty", colors.green)
+    tile(tileW + gap + 1, y, tileW, "PATTERNS", tostring(data.patternCount), data.driveDataAvailable and (data.driveCount .. " drives") or "drive data N/A", colors.yellow)
     tile((tileW * 2) + (gap * 2) + 1, y, w - ((tileW * 2) + (gap * 2)), "CPUs", tostring(#data.cpus), data.busyCpuCount .. " busy", colors.cyan)
     y = y + 4
   end
@@ -1483,8 +1644,15 @@ local function renderSystem(screen, data, h)
     writeAt(15, y, fmt(data.energy) .. " / " .. (data.energyCap > 0 and fmt(data.energyCap) or "?"), colors.white, colors.black, w - 15)
     y = y + 1
     writeAt(2, y, "Flow", colors.lightGray, colors.black, 12)
-    writeAt(15, y, fmt(data.input) .. "/t in   " .. fmt(data.usage) .. "/t used", colors.white, colors.black, w - 15)
-    y = y + 2
+    local netText = (data.powerNet >= 0 and "+" or "") .. fmt(data.powerNet) .. "/t net"
+    writeAt(15, y, fmt(data.input) .. "/t in  " .. fmt(data.usage) .. "/t used  " .. netText, colors.white, colors.black, w - 15)
+    y = y + 1
+    if data.powerNet < 0 and data.powerBufferSeconds > 0 then
+      writeAt(2, y, "Buffer", colors.lightGray, colors.black, 12)
+      writeAt(15, y, "~" .. duration(data.powerBufferSeconds) .. " at current drain", colors.orange, colors.black, w - 15)
+      y = y + 1
+    end
+    y = y + 1
   end
 
   if y <= bottom then
@@ -1497,7 +1665,7 @@ local function renderSystem(screen, data, h)
     else
       for _, cpu in ipairs(data.cpus) do
         if y > bottom - 2 then break end
-        local name = cleanLabel(firstField(cpu, {"name", "displayName"}, "Unnamed CPU"))
+        local name = firstField(cpu, {"_monitorName", "name", "displayName"}, "CPU")
         local storage = n(firstField(cpu, {"storage", "bytes"}, 0))
         local co = n(firstField(cpu, {"coProcessors", "coprocessors"}, 0))
         local busy = cpuBusy(cpu)
@@ -1610,9 +1778,11 @@ while true do
   local cpus = normalizeCpus(rawCpus)
   local rawTasks = callAny({"getCraftingTasks", "listCraftingTasks"}, {}) or {}
   local tasks = normalizeTasks(rawTasks, cpus)
+  local patterns = getPatternCache()
+  enrichTasks(tasks, items, patterns)
 
   local itemTypes, itemCount = 0, 0
-  local bulkIndex, bulkCellCount, bulkItemMatches = buildBulkIndex(cells, items)
+  local bulkIndex, bulkCellCount, bulkItemMatches, bulkAutoAvailable = buildBulkIndex(cells, items)
   local top = {}
   local lowStock = {}
   for _, item in pairs(items) do
@@ -1658,6 +1828,11 @@ while true do
   local fluidPct = pct(fluidUsed, fluidTotal)
   local fluidTypePct = pct(fluidTypes, fluidTypeTotal)
   local powerPct = pct(energy, energyCap)
+  local powerNet = input - usage
+  local powerBufferSeconds = powerNet < 0 and energy / math.max(1, (-powerNet) * 20) or 0
+  local nearFullCellCount, emptyCellCount = cellHealth(cells)
+  local driveCount = countTable(drives)
+  local driveDataAvailable = driveCount > 0 or countTable(cells) == 0
 
   local busyCpuCount = 0
   for _, cpu in pairs(cpus) do
@@ -1673,8 +1848,8 @@ while true do
     health, healthColor, healthDetail = "TYPE SLOTS FULL", colors.red, "add type capacity"
   elseif powerPct > 0 and powerPct < 20 then
     health, healthColor, healthDetail = "LOW POWER", colors.red, "check energy input"
-  elseif input > 0 and usage > input * 1.10 then
-    health, healthColor, healthDetail = "POWER DRAIN", colors.orange, fmt(usage) .. "/t used > " .. fmt(input) .. "/t input"
+  elseif powerNet < 0 and powerBufferSeconds > 0 and powerBufferSeconds < 1800 then
+    health, healthColor, healthDetail = "POWER DRAIN", colors.orange, "~" .. duration(powerBufferSeconds) .. " buffer remaining"
   elseif fluidPct >= 90 then
     health, healthColor, healthDetail = "FLUID STORAGE FULL", colors.orange, "add fluid storage"
   elseif fluidTypePct >= 85 then
@@ -1695,7 +1870,9 @@ while true do
     cells = cells,
     drives = drives,
     cellCount = countTable(cells),
-    driveCount = countTable(drives),
+    driveCount = driveCount,
+    driveDataAvailable = driveDataAvailable,
+    patternCount = countTable(patterns),
     cpus = cpus,
     tasks = tasks,
     warnings = warnings,
@@ -1714,6 +1891,8 @@ while true do
     energyCap = energyCap,
     usage = usage,
     input = input,
+    powerNet = powerNet,
+    powerBufferSeconds = powerBufferSeconds,
     itemTypeTotal = itemTypeTotal,
     fluidTypeTotal = fluidTypeTotal,
     itemCellCount = itemCellCount,
@@ -1725,6 +1904,9 @@ while true do
     powerPct = powerPct,
     bulkCellCount = bulkCellCount,
     bulkItemMatches = bulkItemMatches,
+    bulkAutoAvailable = bulkAutoAvailable,
+    nearFullCellCount = nearFullCellCount,
+    emptyCellCount = emptyCellCount,
     busyCpuCount = busyCpuCount,
     health = health,
     healthColor = healthColor,

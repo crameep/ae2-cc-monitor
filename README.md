@@ -103,3 +103,11 @@ Tap `IGN` beside a confirmed warning to ignore it. To clear learned history and 
 delete .ae2_usage_state
 reboot
 ```
+
+## Bridge-specific Crafting Estimates
+
+Some Advanced Peripherals builds expose terminal-started jobs only through a crafting CPU's `craftingJob` field. In that case the bridge provides the target item and quantity, but no direct completed count or percentage. The dashboard now shows **RUNNING** instead of a misleading `0%`, estimates positive output from AE2 stock changes, and clearly labels those figures as estimates.
+
+The Crafting page also uses `getPatterns()` to show the immediate recipe inputs for the active output. Stock estimates can under-count outputs that are consumed immediately by parent recipes, or over-count items imported from elsewhere.
+
+When `getDrives()` returns no location data, the System page reports drive data as unavailable and shows the exposed pattern count instead. Automatic bulk-item association is disabled when cell objects do not expose their configured contents; manual `B+` markers continue to work.
