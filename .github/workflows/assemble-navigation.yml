@@ -1,0 +1,46 @@
+name: Assemble navigation dashboard
+
+on:
+  push:
+    branches:
+      - feature/navigation-dashboard
+    paths:
+      - '.nav-update/**'
+      - '.github/workflows/assemble-navigation.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/navigation-dashboard
+          fetch-depth: 0
+
+      - name: Assemble and verify startup.lua
+        shell: bash
+        run: |
+          cat .nav-update/part-*.lua > startup.lua
+          echo '31bb1c9a5a01376b72629d604668cb445a1c108d19abe9bc18e3f12381172f64  startup.lua' | sha256sum -c -
+          sudo apt-get update
+          sudo apt-get install -y lua5.2
+          luac5.2 -p startup.lua
+
+      - name: Remove staging files and workflow
+        shell: bash
+        run: |
+          rm -rf .nav-update
+          rm -f .github/workflows/assemble-navigation.yml
+
+      - name: Commit assembled dashboard
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add startup.lua README.md .nav-update .github/workflows/assemble-navigation.yml
+          git commit -m 'Add navigation dashboard and crafting monitor improvements'
+          git push origin feature/navigation-dashboard
