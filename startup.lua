@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-02.6"
+local VERSION = "2026-07-09.1"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local STATE_FILE = ".ae2_usage_state"
@@ -158,8 +158,8 @@ local function loadBulkHints()
   if not h then return hints end
   local raw = h.readAll() or ""
   h.close()
-  for line in string.gmatch(raw, "[^\r\n]+") do
-    line = string.gsub(line, "#.*$", "")
+  for rawLine in string.gmatch(raw, "[^\r\n]+") do
+    local line = string.gsub(rawLine, "#.*$", "")
     line = string.gsub(line, "^%s+", "")
     line = string.gsub(line, "%s+$", "")
     if line ~= "" then
@@ -459,8 +459,8 @@ end
 local function tile(x, y, w, title, value, sub, bg)
   fillRect(x, y, w, 3, bg)
   writeAt(x + 1, y, title, colors.black, bg, w - 2)
-  writeAt(x + 1, y + 1, value, colors.white, bg, w - 2)
-  writeAt(x + 1, y + 2, sub, colors.lightGray, bg, w - 2)
+  writeAt(x + 1, y + 1, value, colors.black, bg, w - 2)
+  writeAt(x + 1, y + 2, sub, colors.black, bg, w - 2)
 end
 
 local function bar(x, y, w, label, used, total, color)
@@ -529,15 +529,27 @@ end
 
 local usageState = loadState()
 local warningButtons = {}
-local updateButtons = {}
 local bulkButtons = {}
-local sectionButtons = {}
-local pageButtons = {}
-local collapsedSections = {}
-local storedPages = {}
+local uiButtons = {}
+local currentPages = {}
+local listPages = {}
+local craftHistory = {}
 local statusMessage = nil
 local statusUntil = 0
 local setStatus
+
+local PAGE_ORDER = {"overview", "crafting", "stock", "storage", "system"}
+local PAGE_TITLES = {
+  overview = "OVERVIEW",
+  crafting = "CRAFTING",
+  stock = "STOCK WATCH",
+  storage = "STORAGE",
+  system = "SYSTEM"
+}
+
+local function nowSeconds()
+  return os.epoch and math.floor(os.epoch("utc") / 1000) or os.time()
+end
 
 local function filteredWarnings(warnings)
   local filtered = {}
@@ -549,66 +561,56 @@ local function filteredWarnings(warnings)
   return filtered
 end
 
-local function ignoreWarningAt(screen, x, y)
-  for _, button in ipairs(warningButtons[screen] or {}) do
-    if y == button.y and x >= button.x and x <= button.x2 then
-      usageState.ignored[button.key] = button.name or true
-      usageState.tracked[button.key] = nil
-      usageState.warnings = filteredWarnings(usageState.warnings)
-      saveState(usageState)
-      return true
+local function callAnyArg(names, arg, default)
+  for _, name in ipairs(names or {}) do
+    local f = bridge[name]
+    if type(f) == "function" then
+      local ok, result = pcall(f, arg)
+      if ok and result ~= nil then return result end
+      ok, result = pcall(f)
+      if ok and result ~= nil then return result end
     end
   end
-  return false
+  return default
 end
 
-local function toggleBulkAt(screen, x, y)
-  for _, button in ipairs(bulkButtons[screen] or {}) do
-    if y == button.y and x >= button.x and x <= button.x2 then
-      local marked = toggleBulkHint(button.key, button.name)
-      if marked == nil then
-        setStatus("Could not save bulk marker")
-      elseif marked then
-        setStatus("Bulk marker added: " .. button.name)
-      else
-        setStatus("Bulk marker removed: " .. button.name)
-      end
-      return true
+local function methodValue(object, names, default)
+  if type(object) ~= "table" then return default end
+  for _, name in ipairs(names or {}) do
+    local value = object[name]
+    if type(value) == "function" then
+      local ok, result = pcall(value)
+      if not ok then ok, result = pcall(value, object) end
+      if ok and result ~= nil then return result end
+    elseif value ~= nil then
+      return value
     end
   end
-  return false
+  return default
 end
 
-local function isCollapsed(screen, section)
-  local state = collapsedSections[screen]
-  return state and state[section] == true
-end
-
-local function toggleSectionAt(screen, x, y)
-  for _, button in ipairs(sectionButtons[screen] or {}) do
-    if y == button.y and x >= button.x and x <= button.x2 then
-      collapsedSections[screen] = collapsedSections[screen] or {}
-      collapsedSections[screen][button.section] = not collapsedSections[screen][button.section]
-      return true
-    end
+local function firstField(object, names, default)
+  if type(object) ~= "table" then return default end
+  for _, name in ipairs(names or {}) do
+    local value = object[name]
+    if value ~= nil and type(value) ~= "function" then return value end
   end
-  return false
+  return default
 end
 
-local function pageAt(screen, x, y)
-  for _, button in ipairs(pageButtons[screen] or {}) do
-    if y == button.y and x >= button.x and x <= button.x2 then
-      storedPages[screen] = math.max(1, n(storedPages[screen]) + button.delta)
-      return true
-    end
-  end
-  return false
+local function registerButton(screen, button)
+  uiButtons[screen] = uiButtons[screen] or {}
+  uiButtons[screen][#uiButtons[screen] + 1] = button
+end
+
+local function setListPage(screen, page, delta)
+  listPages[screen] = listPages[screen] or {}
+  listPages[screen][page] = math.max(1, n(listPages[screen][page] or 1) + delta)
 end
 
 function setStatus(message)
   statusMessage = message
-  local now = os.epoch and math.floor(os.epoch("utc") / 1000) or os.time()
-  statusUntil = now + 8
+  statusUntil = nowSeconds() + 8
 end
 
 local function runUpdater()
@@ -642,19 +644,47 @@ local function runUpdater()
   return true
 end
 
-local function handleTouch(screen, x, y)
-  local updateButton = updateButtons[screen]
-  if updateButton and y == updateButton.y and x >= updateButton.x and x <= updateButton.x2 then
-    return runUpdater()
+local function ignoreWarning(button)
+  usageState.ignored[button.key] = button.name or true
+  usageState.tracked[button.key] = nil
+  usageState.warnings = filteredWarnings(usageState.warnings)
+  saveState(usageState)
+  setStatus("Ignored: " .. tostring(button.name or button.key))
+end
+
+local function toggleBulk(button)
+  local marked = toggleBulkHint(button.key, button.name)
+  if marked == nil then
+    setStatus("Could not save bulk marker")
+  elseif marked then
+    setStatus("Bulk marker added: " .. button.name)
+  else
+    setStatus("Bulk marker removed: " .. button.name)
   end
-  if pageAt(screen, x, y) then return true end
-  if toggleSectionAt(screen, x, y) then return true end
-  if toggleBulkAt(screen, x, y) then return true end
-  return ignoreWarningAt(screen, x, y)
+end
+
+local function handleTouch(screen, x, y)
+  for _, button in ipairs(uiButtons[screen] or {}) do
+    if y >= button.y and y <= (button.y2 or button.y) and x >= button.x and x <= button.x2 then
+      if button.action == "nav" then
+        currentPages[screen] = button.page
+      elseif button.action == "page" then
+        setListPage(screen, button.page, button.delta)
+      elseif button.action == "ignore" then
+        ignoreWarning(button)
+      elseif button.action == "bulk" then
+        toggleBulk(button)
+      elseif button.action == "update" then
+        return runUpdater()
+      end
+      return true
+    end
+  end
+  return false
 end
 
 local function updateUsage(items)
-  local now = os.epoch and math.floor(os.epoch("utc") / 1000) or os.time()
+  local now = nowSeconds()
   if usageState.lastSample and now - usageState.lastSample < SAMPLE_SECONDS then
     usageState.warnings = filteredWarnings(usageState.warnings)
     return usageState.warnings or {}, usageState.recent or {}
@@ -762,31 +792,678 @@ local function updateUsage(items)
   return warnings, recent
 end
 
+local function duration(seconds)
+  seconds = math.max(0, math.floor(n(seconds) + 0.5))
+  if seconds >= 3600 then
+    return string.format("%dh %02dm", math.floor(seconds / 3600), math.floor((seconds % 3600) / 60))
+  elseif seconds >= 60 then
+    return string.format("%dm %02ds", math.floor(seconds / 60), seconds % 60)
+  end
+  return tostring(seconds) .. "s"
+end
+
+local function fmtRate(rate)
+  rate = n(rate)
+  if rate <= 0 then return "--/s" end
+  if rate < 0.1 then return string.format("%.2f/s", rate) end
+  if rate < 10 then return string.format("%.1f/s", rate) end
+  return fmt(rate) .. "/s"
+end
+
+local function collectResources(value, out, depth)
+  out = out or {}
+  depth = depth or 0
+  if depth > 3 or type(value) ~= "table" then return out end
+
+  local name = firstField(value, {"displayName", "name", "id", "resource"}, nil)
+  local amount = firstField(value, {"amount", "count", "quantity", "qty", "crafted"}, nil)
+  if name ~= nil and (amount ~= nil or depth > 0) then
+    out[#out + 1] = {name = cleanLabel(name), amount = n(amount)}
+    return out
+  end
+
+  for _, child in pairs(value) do
+    if type(child) == "table" then collectResources(child, out, depth + 1) end
+  end
+  return out
+end
+
+local function resourceSummary(prefix, value, maxItems)
+  local rows = collectResources(value, {}, 0)
+  table.sort(rows, function(a, b) return a.amount > b.amount end)
+  if #rows == 0 then return nil end
+  local parts = {}
+  for i = 1, math.min(#rows, maxItems or 2) do
+    local amount = rows[i].amount > 0 and (" " .. fmt(rows[i].amount)) or ""
+    parts[#parts + 1] = rows[i].name .. amount
+  end
+  return prefix .. table.concat(parts, ", ")
+end
+
+local function taskDetailObject(task, bridgeId, id)
+  if type(task) == "table" and (
+    type(task.getUsedItems) == "function" or
+    type(task.getEmittedItems) == "function" or
+    type(task.getMissingItems) == "function") then
+    return task
+  end
+
+  local lookupId = nil
+  local numericBridgeId = tonumber(bridgeId)
+  if numericBridgeId and numericBridgeId >= 0 then
+    lookupId = numericBridgeId
+  elseif tonumber(id) then
+    lookupId = tonumber(id)
+  end
+  if lookupId ~= nil then
+    local detail = callAnyArg({"getCraftingTask", "getCraftingJob"}, lookupId, nil)
+    if type(detail) == "table" then return detail end
+  end
+  return task
+end
+
+local function normalizeTask(task, index)
+  task = type(task) == "table" and task or {}
+  local bridgeId = firstField(task, {"bridge_id", "bridgeId"}, -1)
+  local id = firstField(task, {"id", "jobId", "taskId"}, nil)
+  if id == nil then id = methodValue(task, {"getId"}, nil) end
+
+  local resource = firstField(task, {"resource", "requested", "requestedItem", "output", "finalOutput"}, nil)
+  if resource == nil then resource = methodValue(task, {"getRequestedItem", "getFinalOutput"}, nil) end
+  local label = type(resource) == "table" and itemLabel(resource) or cleanLabel(resource or ("Crafting Job " .. index))
+
+  local quantity = n(firstField(task, {"quantity", "total", "totalItems", "count", "amount"}, 0))
+  if quantity <= 0 then quantity = n(methodValue(task, {"getTotalItems"}, 0)) end
+  if quantity <= 0 and type(resource) == "table" then quantity = amountOf(resource) end
+
+  local crafted = n(firstField(task, {"crafted", "itemProgress", "completed", "done"}, 0))
+  if crafted <= 0 then crafted = n(methodValue(task, {"getItemProgress"}, 0)) end
+
+  local completion = n(firstField(task, {"completion", "percent", "percentage", "progress"}, 0))
+  if completion > 1 then completion = completion / 100 end
+  if completion <= 0 and quantity > 0 then completion = crafted / quantity end
+  completion = math.max(0, math.min(1, completion))
+  if crafted <= 0 and quantity > 0 and completion > 0 then
+    crafted = quantity * completion
+  end
+
+  local cpu = firstField(task, {"cpu", "craftingCpu", "craftingCPU"}, nil)
+  local cpuName = firstField(task, {"cpuName"}, nil)
+  if type(cpu) == "table" then
+    cpuName = firstField(cpu, {"name", "displayName"}, cpuName)
+  elseif type(cpu) == "string" then
+    cpuName = cpu
+  end
+  cpuName = cleanLabel(cpuName or "Automatic CPU")
+
+  local elapsed = n(firstField(task, {"elapsed", "elapsedTime", "time"}, 0))
+  if elapsed <= 0 then elapsed = n(methodValue(task, {"getElapsedTime"}, 0)) end
+  if elapsed > 100000 then elapsed = elapsed / 1000 end
+
+  local usedBytes = n(firstField(task, {"usedBytes", "bytes"}, 0))
+  if usedBytes <= 0 then usedBytes = n(methodValue(task, {"getUsedBytes"}, 0)) end
+
+  local debug = firstField(task, {"debugMessage", "message", "state", "status"}, nil)
+  if debug == nil then debug = methodValue(task, {"getDebugMessage"}, nil) end
+
+  local detail = taskDetailObject(task, bridgeId, id)
+  local missing = methodValue(detail, {"getMissingItems"}, nil)
+  local emitted = methodValue(detail, {"getEmittedItems"}, nil)
+  local used = methodValue(detail, {"getUsedItems"}, nil)
+  local subparts = resourceSummary("Missing: ", missing, 2)
+    or resourceSummary("Produced: ", emitted, 2)
+    or resourceSummary("Using: ", used, 2)
+
+  local identity = id
+  local numericBridgeId = tonumber(bridgeId)
+  if identity == nil and numericBridgeId and numericBridgeId >= 0 then identity = numericBridgeId end
+  local key = tostring(identity or (label .. ":" .. tostring(quantity) .. ":" .. tostring(cpuName)))
+  local now = nowSeconds()
+  local previous = craftHistory[key]
+  local rate = previous and n(previous.rate) or 0
+  if previous and crafted >= n(previous.crafted) and now > n(previous.time) then
+    local instant = (crafted - n(previous.crafted)) / (now - n(previous.time))
+    if instant > 0 then
+      rate = rate > 0 and ((rate * 0.65) + (instant * 0.35)) or instant
+    end
+  elseif not previous and elapsed > 0 and crafted > 0 then
+    rate = crafted / elapsed
+  end
+  craftHistory[key] = {crafted = crafted, time = now, rate = rate, seen = now}
+
+  local remaining = math.max(0, quantity - crafted)
+  local eta = rate > 0 and remaining / rate or 0
+
+  return {
+    key = key,
+    id = id,
+    bridgeId = bridgeId,
+    name = label,
+    quantity = quantity,
+    crafted = crafted,
+    completion = completion,
+    cpu = cpuName,
+    usedBytes = usedBytes,
+    elapsed = elapsed,
+    rate = rate,
+    eta = eta,
+    subparts = subparts,
+    debug = debug
+  }
+end
+
+local function cpuBusy(cpu)
+  local value = firstField(cpu, {"isBusy", "busy"}, nil)
+  if value ~= nil then return value == true end
+  return methodValue(cpu, {"isBusy"}, false) == true
+end
+
+local function normalizeCpus(cpus)
+  local normalized = {}
+  for _, cpu in pairs(cpus or {}) do
+    if type(cpu) == "table" then normalized[#normalized + 1] = cpu end
+  end
+  table.sort(normalized, function(a, b)
+    local an = cleanLabel(firstField(a, {"name", "displayName"}, "Unnamed CPU"))
+    local bn = cleanLabel(firstField(b, {"name", "displayName"}, "Unnamed CPU"))
+    return an < bn
+  end)
+  return normalized
+end
+
+local function normalizeTasks(tasks, cpus)
+  local sources = {}
+  for _, task in pairs(tasks or {}) do
+    if type(task) == "table" then sources[#sources + 1] = task end
+  end
+
+  -- Some Advanced Peripherals/AE2 combinations report terminal-started jobs
+  -- on the crafting CPU object even when getCraftingTasks() is empty.
+  for _, cpu in pairs(cpus or {}) do
+    local job = firstField(cpu, {"craftingJob", "job", "task"}, nil)
+    if job == nil then job = methodValue(cpu, {"getCraftingJob", "getJob"}, nil) end
+    if type(job) == "table" then
+      local copy = {}
+      for key, value in pairs(job) do copy[key] = value end
+      if copy.cpu == nil and copy.craftingCpu == nil and copy.craftingCPU == nil then copy.cpu = cpu end
+      sources[#sources + 1] = copy
+    end
+  end
+
+  local normalized = {}
+  local seen = {}
+  for _, task in ipairs(sources) do
+    local row = normalizeTask(task, #normalized + 1)
+    if not seen[row.key] then
+      seen[row.key] = true
+      normalized[#normalized + 1] = row
+    end
+  end
+  table.sort(normalized, function(a, b)
+    if a.completion ~= b.completion then return a.completion > b.completion end
+    return a.name < b.name
+  end)
+
+  local now = nowSeconds()
+  for key, history in pairs(craftHistory) do
+    if now - n(history.seen) > 180 then craftHistory[key] = nil end
+  end
+  return normalized
+end
+
+local function centerText(y, text, fg, bg, maxWidth)
+  local w = mon.getSize()
+  text = tostring(text or "")
+  if maxWidth then text = string.sub(text, 1, maxWidth) end
+  local x = math.max(1, math.floor((w - #text) / 2) + 1)
+  writeAt(x, y, text, fg, bg)
+end
+
+local function meter(x, y, width, ratio, color, emptyColor)
+  width = math.max(1, width)
+  ratio = math.max(0, math.min(1, n(ratio)))
+  local filled = math.floor((width * ratio) + 0.5)
+  fillRect(x, y, width, 1, emptyColor or colors.gray)
+  if filled > 0 then fillRect(x, y, filled, 1, color or colors.green) end
+end
+
+local function capacityRow(y, label, used, total, color)
+  local w = mon.getSize()
+  local labelW = math.min(12, math.max(8, math.floor(w * 0.18)))
+  local value = fmt(used) .. "/" .. (n(total) > 0 and fmt(total) or "?")
+  local pctText = string.format("%3d%%", math.floor(pct(used, total) + 0.5))
+  local rightW = #value + #pctText + 2
+  local barX = labelW + 2
+  local barW = math.max(4, w - barX - rightW)
+  writeAt(2, y, label, colors.white, colors.black, labelW - 1)
+  meter(barX, y, barW, pct(used, total) / 100, color, colors.gray)
+  writeAt(w - rightW + 1, y, value .. " " .. pctText, colors.white, colors.black, rightW)
+end
+
+local function statusIsActive()
+  return statusMessage and nowSeconds() < statusUntil
+end
+
+local function drawHeader(screen, page, data)
+  local w = mon.getSize()
+  clearLine(1, colors.blue)
+  writeAt(2, 1, "AE2 // " .. PAGE_TITLES[page], colors.white, colors.blue, math.max(8, w - 18))
+  local timeText = textutils.formatTime(os.time(), true)
+  writeAt(math.max(1, w - #timeText + 1), 1, timeText, colors.white, colors.blue, #timeText)
+
+  local stripColor = data.healthColor
+  clearLine(2, stripColor)
+  local message
+  if statusIsActive() then
+    message = statusMessage
+  else
+    message = data.health .. "  |  " .. data.healthDetail
+  end
+  writeAt(2, 2, message, colors.black, stripColor, w - 2)
+end
+
+local function drawNav(screen, page, h)
+  local w = mon.getSize()
+  local labels = w >= 58
+    and {"OVERVIEW", "CRAFTING", "STOCK", "STORAGE", "SYSTEM"}
+    or {"HOME", "CRAFT", "STOCK", "STORE", "SYS"}
+  local x = 1
+  for i, pageName in ipairs(PAGE_ORDER) do
+    local remaining = w - x + 1
+    local remainingTabs = #PAGE_ORDER - i + 1
+    local tabW = math.floor(remaining / remainingTabs)
+    local x2 = i == #PAGE_ORDER and w or x + tabW - 1
+    local active = pageName == page
+    local bg = active and colors.cyan or colors.gray
+    local fg = active and colors.black or colors.white
+    fillRect(x, h, x2 - x + 1, 1, bg)
+    local label = labels[i]
+    local labelX = x + math.max(0, math.floor(((x2 - x + 1) - #label) / 2))
+    writeAt(labelX, h, label, fg, bg, x2 - labelX + 1)
+    registerButton(screen, {x = x, x2 = x2, y = h, action = "nav", page = pageName})
+    x = x2 + 1
+  end
+end
+
+local function pageControls(screen, page, y, pageNumber, pageCount)
+  local w = mon.getSize()
+  pageNumber = math.max(1, math.min(pageNumber, pageCount))
+  local text = "PAGE " .. pageNumber .. "/" .. pageCount
+  writeAt(math.max(1, w - #text - 12), y, text, colors.lightGray, colors.black, #text)
+  local prevX = math.max(1, w - 10)
+  local nextX = math.max(1, w - 4)
+  writeAt(prevX, y, "<", pageNumber > 1 and colors.white or colors.gray, colors.blue, 3)
+  writeAt(nextX, y, ">", pageNumber < pageCount and colors.white or colors.gray, colors.blue, 3)
+  if pageNumber > 1 then registerButton(screen, {x = prevX, x2 = prevX + 2, y = y, action = "page", page = page, delta = -1}) end
+  if pageNumber < pageCount then registerButton(screen, {x = nextX, x2 = nextX + 2, y = y, action = "page", page = page, delta = 1}) end
+end
+
+local function renderOverview(screen, data, h)
+  local w = mon.getSize()
+  local bottom = h - 1
+  local y = 3
+
+  if bottom - y >= 8 and w >= 42 then
+    local gap = 1
+    local tileW = math.floor((w - (gap * 2)) / 3)
+    tile(1, y, tileW, "ITEM STORAGE", math.floor(data.itemPct + 0.5) .. "%", fmt(data.itemUsed) .. " / " .. (data.itemTotal > 0 and fmt(data.itemTotal) or "?"), colors.green)
+    tile(tileW + gap + 1, y, tileW, "TYPE SLOTS", math.floor(data.typePct + 0.5) .. "%", data.itemTypes .. " / " .. (data.itemTypeTotal > 0 and data.itemTypeTotal or "?"), colors.yellow)
+    tile((tileW * 2) + (gap * 2) + 1, y, w - ((tileW * 2) + (gap * 2)), "POWER", math.floor(data.powerPct + 0.5) .. "%", fmt(data.usage) .. "/t use", colors.orange)
+    y = y + 4
+  end
+
+  capacityRow(y, "Items", data.itemUsed, data.itemTotal, colors.lime); y = y + 1
+  capacityRow(y, "Types", data.itemTypes, data.itemTypeTotal, colors.yellow); y = y + 1
+  capacityRow(y, "Fluids", data.fluidUsed, data.fluidTotal, colors.blue); y = y + 1
+  capacityRow(y, "Power", data.energy, data.energyCap, colors.orange); y = y + 2
+
+  if y <= bottom then
+    clearLine(y, colors.lightGray)
+    writeAt(2, y, "ACTIVE CRAFTING", colors.black, colors.lightGray, w - 2)
+    writeAt(math.max(1, w - 11), y, tostring(#data.tasks) .. " JOB(S)", colors.black, colors.lightGray, 10)
+    y = y + 1
+    if #data.tasks == 0 then
+      local summary = data.busyCpuCount > 0 and (data.busyCpuCount .. " CPU(s) busy; job details unavailable") or "No active crafting jobs"
+      writeAt(2, y, summary, data.busyCpuCount > 0 and colors.cyan or colors.lightGray, colors.black, w - 2)
+      y = y + 1
+    else
+      for i = 1, math.min(#data.tasks, 2) do
+        local task = data.tasks[i]
+        local pctText = string.format("%3d%%", math.floor(task.completion * 100 + 0.5))
+        local detail = task.quantity > 0 and (fmt(task.crafted) .. "/" .. fmt(task.quantity)) or "running"
+        writeAt(2, y, task.name, colors.cyan, colors.black, math.max(8, w - #pctText - #detail - 6))
+        writeAt(math.max(1, w - #detail - #pctText - 2), y, detail .. " " .. pctText, colors.white, colors.black)
+        y = y + 1
+      end
+    end
+  end
+
+  if y <= bottom then
+    y = y + 1
+    if y <= bottom then
+      local alertColor = #data.warnings > 0 and colors.red or (#data.recent > 0 and colors.orange or colors.green)
+      clearLine(y, alertColor)
+      local alertTitle = #data.warnings > 0 and "CONFIRMED MATERIAL DROP" or (#data.recent > 0 and "RECENT MATERIAL USE" or "NO ACTIVE MATERIAL ALERTS")
+      writeAt(2, y, alertTitle, colors.black, alertColor, w - 2)
+      y = y + 1
+    end
+    if y <= bottom then
+      if #data.warnings > 0 then
+        local row = data.warnings[1]
+        writeAt(2, y, row.name .. "  -" .. fmt(row.drop) .. "  left " .. fmt(row.left), colors.red, colors.black, w - 2)
+      elseif #data.recent > 0 then
+        local row = data.recent[1]
+        writeAt(2, y, row.name .. "  -" .. fmt(row.drop) .. "  left " .. fmt(row.left), colors.orange, colors.black, w - 2)
+      elseif #data.lowStock > 0 then
+        local row = data.lowStock[1]
+        writeAt(2, y, "Low: " .. row.name .. "  " .. fmt(row.amount), colors.yellow, colors.black, w - 2)
+      else
+        writeAt(2, y, "Storage, power, and watched stock are stable", colors.lightGray, colors.black, w - 2)
+      end
+    end
+  end
+end
+
+local function renderCrafting(screen, data, h)
+  local w = mon.getSize()
+  local bottom = h - 1
+  clearLine(3, colors.black)
+  writeAt(2, 3, tostring(#data.tasks) .. " active job(s)  |  " .. data.busyCpuCount .. "/" .. #data.cpus .. " CPUs busy", colors.lightGray, colors.black, math.max(8, w - 25))
+
+  if #data.tasks == 0 then
+    if data.busyCpuCount > 0 then
+      centerText(math.min(bottom, 7), "CRAFTING DETECTED", colors.cyan, colors.black, w)
+      if math.min(bottom, 9) <= bottom then centerText(math.min(bottom, 9), "CPU busy; this AP build did not expose job details.", colors.lightGray, colors.black, w) end
+    else
+      centerText(math.min(bottom, 7), "NO ACTIVE CRAFTING JOBS", colors.cyan, colors.black, w)
+      if math.min(bottom, 9) <= bottom then centerText(math.min(bottom, 9), "Start a craft from an AE2 terminal to see it here.", colors.lightGray, colors.black, w) end
+    end
+    local y = 12
+    if y <= bottom then
+      clearLine(y, colors.lightGray)
+      writeAt(2, y, "CRAFTING CPUs", colors.black, colors.lightGray, w - 2)
+      y = y + 1
+      for _, cpu in ipairs(data.cpus) do
+        if y > bottom then break end
+        local name = cleanLabel(firstField(cpu, {"name", "displayName"}, "Unnamed CPU"))
+        local storage = n(firstField(cpu, {"storage", "bytes"}, 0))
+        local co = n(firstField(cpu, {"coProcessors", "coprocessors"}, 0))
+        local busy = cpuBusy(cpu)
+        writeAt(2, y, name, busy and colors.cyan or colors.white, colors.black, math.max(8, w - 26))
+        writeAt(math.max(1, w - 24), y, (busy and "BUSY" or "IDLE") .. "  " .. fmt(storage) .. "B  " .. co .. " co", busy and colors.cyan or colors.lightGray, colors.black, 24)
+        y = y + 1
+      end
+    end
+    return
+  end
+
+  local taskHeight = 4
+  local rowsAvailable = math.max(taskHeight, bottom - 3)
+  local perPage = math.max(1, math.floor(rowsAvailable / taskHeight))
+  local pageCount = math.max(1, math.ceil(#data.tasks / perPage))
+  listPages[screen] = listPages[screen] or {}
+  local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen].crafting or 1)))
+  listPages[screen].crafting = pageNumber
+  pageControls(screen, "crafting", 3, pageNumber, pageCount)
+
+  local startIndex = ((pageNumber - 1) * perPage) + 1
+  local y = 4
+  for i = startIndex, math.min(#data.tasks, startIndex + perPage - 1) do
+    local task = data.tasks[i]
+    if y + taskHeight - 1 > bottom then break end
+    clearLine(y, colors.gray)
+    local pctText = string.format("%3d%%", math.floor(task.completion * 100 + 0.5))
+    writeAt(2, y, task.name, colors.white, colors.gray, math.max(8, w - #pctText - 4))
+    writeAt(math.max(1, w - #pctText), y, pctText, colors.white, colors.gray, #pctText)
+    meter(2, y + 1, math.max(4, w - 2), task.completion, colors.cyan, colors.gray)
+
+    local progress = task.quantity > 0 and (fmt(task.crafted) .. " / " .. fmt(task.quantity)) or "Progress data unavailable"
+    local rateEta = task.rate > 0 and (fmtRate(task.rate) .. "  ETA " .. duration(task.eta)) or "rate learning"
+    writeAt(2, y + 2, progress, colors.white, colors.black, math.max(8, w - #rateEta - 4))
+    writeAt(math.max(1, w - #rateEta), y + 2, rateEta, colors.lightGray, colors.black, #rateEta)
+
+    local detail = task.subparts or ("CPU " .. task.cpu .. (task.usedBytes > 0 and ("  |  " .. fmt(task.usedBytes) .. " bytes") or ""))
+    if task.debug and not task.subparts then detail = detail .. "  |  " .. cleanLabel(task.debug) end
+    writeAt(2, y + 3, detail, task.subparts and colors.yellow or colors.lightGray, colors.black, w - 2)
+    y = y + taskHeight
+  end
+end
+
+local function renderStock(screen, data, h)
+  local w = mon.getSize()
+  local bottom = h - 1
+  local y = 3
+  clearLine(y, colors.black)
+  writeAt(2, y, #data.warnings .. " warnings  |  " .. #data.recent .. " recent movers  |  " .. #data.lowStock .. " low watched items", colors.lightGray, colors.black, w - 2)
+  y = y + 2
+
+  clearLine(y, #data.warnings > 0 and colors.red or colors.gray)
+  writeAt(2, y, "CONFIRMED DROPS", colors.black, #data.warnings > 0 and colors.red or colors.gray, w - 2)
+  y = y + 1
+  if #data.warnings == 0 then
+    writeAt(2, y, "None", colors.lightGray, colors.black, w - 2)
+    y = y + 1
+  else
+    for i = 1, math.min(#data.warnings, 4) do
+      if y > bottom then break end
+      local row = data.warnings[i]
+      local buttonX = math.max(1, w - 5)
+      writeAt(2, y, row.name, colors.red, colors.black, math.max(8, w - 30))
+      writeAt(math.max(1, w - 24), y, "-" .. fmt(row.drop) .. " left " .. fmt(row.left), colors.yellow, colors.black, 17)
+      writeAt(buttonX, y, "IGN", colors.white, colors.gray, 3)
+      registerButton(screen, {x = buttonX, x2 = w, y = y, action = "ignore", key = row.key, name = row.name})
+      y = y + 1
+    end
+  end
+
+  if y <= bottom then y = y + 1 end
+  if y <= bottom then
+    clearLine(y, #data.recent > 0 and colors.orange or colors.gray)
+    writeAt(2, y, "RECENT USE", colors.black, #data.recent > 0 and colors.orange or colors.gray, w - 2)
+    y = y + 1
+    if #data.recent == 0 then
+      writeAt(2, y, "No repeated movement detected", colors.lightGray, colors.black, w - 2)
+      y = y + 1
+    else
+      for i = 1, math.min(#data.recent, 3) do
+        if y > bottom then break end
+        local row = data.recent[i]
+        writeAt(2, y, row.name, colors.orange, colors.black, math.max(8, w - 25))
+        writeAt(math.max(1, w - 22), y, "-" .. fmt(row.drop) .. " left " .. fmt(row.left), colors.yellow, colors.black, 22)
+        y = y + 1
+      end
+    end
+  end
+
+  if y <= bottom then y = y + 1 end
+  if y <= bottom then
+    clearLine(y, colors.yellow)
+    writeAt(2, y, "ATM10 LOW STOCK", colors.black, colors.yellow, math.max(8, w - 24))
+    y = y + 1
+    local rowsAvailable = math.max(1, bottom - y + 1)
+    local pageCount = math.max(1, math.ceil(#data.lowStock / rowsAvailable))
+    listPages[screen] = listPages[screen] or {}
+    local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen].stock or 1)))
+    listPages[screen].stock = pageNumber
+    if pageCount > 1 then pageControls(screen, "stock", y - 1, pageNumber, pageCount) end
+    if #data.lowStock == 0 then
+      writeAt(2, y, "No watched ATM10 bottlenecks are low", colors.lightGray, colors.black, w - 2)
+    else
+      local startIndex = ((pageNumber - 1) * rowsAvailable) + 1
+      for i = startIndex, math.min(#data.lowStock, startIndex + rowsAvailable - 1) do
+        local row = data.lowStock[i]
+        local amountText = fmt(row.amount)
+        writeAt(2, y, row.name, colors.yellow, colors.black, math.max(8, w - #amountText - 18))
+        writeAt(math.max(1, w - #amountText - 14), y, row.group, colors.lightGray, colors.black, 12)
+        writeAt(math.max(1, w - #amountText), y, amountText, colors.white, colors.black, #amountText)
+        y = y + 1
+      end
+    end
+  end
+end
+
+local function renderStorage(screen, data, h)
+  local w = mon.getSize()
+  local bottom = h - 1
+  local y = 3
+  local rowsAvailable = math.max(1, bottom - y)
+  local pageCount = math.max(1, math.ceil(#data.top / rowsAvailable))
+  listPages[screen] = listPages[screen] or {}
+  local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen].storage or 1)))
+  listPages[screen].storage = pageNumber
+
+  clearLine(y, colors.black)
+  writeAt(2, y, #data.top .. " stored item types  |  " .. data.bulkItemMatches .. " bulk-marked  |  " .. data.bulkCellCount .. " bulk cells", colors.lightGray, colors.black, math.max(8, w - 24))
+  pageControls(screen, "storage", y, pageNumber, pageCount)
+  y = y + 1
+
+  clearLine(y, colors.lightGray)
+  writeAt(2, y, "ITEM", colors.black, colors.lightGray, math.max(8, w - 22))
+  writeAt(math.max(1, w - 19), y, "CELL", colors.black, colors.lightGray, 5)
+  writeAt(math.max(1, w - 11), y, "AMOUNT", colors.black, colors.lightGray, 10)
+  y = y + 1
+
+  if #data.top == 0 then
+    centerText(math.min(bottom, y + 3), "No stored items reported", colors.lightGray, colors.black, w)
+    return
+  end
+
+  local startIndex = ((pageNumber - 1) * rowsAvailable) + 1
+  for i = startIndex, math.min(#data.top, startIndex + rowsAvailable - 1) do
+    if y > bottom then break end
+    local row = data.top[i]
+    local amountText = fmt(row.amount)
+    local marker = row.bulk and "BULK" or "B+"
+    local rowBg = row.bulk and colors.purple or ((i % 2 == 0) and colors.gray or colors.black)
+    clearLine(y, rowBg)
+    writeAt(2, y, row.name, colors.white, rowBg, math.max(8, w - #amountText - 10))
+    local markerX = math.max(1, w - #amountText - 7)
+    writeAt(markerX, y, marker, row.bulk and colors.white or colors.lightGray, rowBg, 5)
+    registerButton(screen, {x = markerX, x2 = markerX + 4, y = y, action = "bulk", key = row.key, name = row.name})
+    writeAt(math.max(1, w - #amountText), y, amountText, colors.white, rowBg, #amountText)
+    y = y + 1
+  end
+end
+
+local function renderSystem(screen, data, h)
+  local w = mon.getSize()
+  local bottom = h - 1
+  local y = 3
+
+  clearLine(y, colors.black)
+  local onlineText = data.online and "GRID ONLINE" or "GRID STATUS UNKNOWN"
+  writeAt(2, y, onlineText, data.online and colors.green or colors.orange, colors.black, math.max(8, w - 14))
+  local updateX = math.max(1, w - 10)
+  writeAt(updateX, y, " UPDATE ", colors.white, colors.blue, 8)
+  registerButton(screen, {x = updateX, x2 = w, y = y, action = "update"})
+  y = y + 2
+
+  if w >= 42 and y + 2 <= bottom then
+    local gap = 1
+    local tileW = math.floor((w - (gap * 2)) / 3)
+    tile(1, y, tileW, "CELLS", tostring(data.cellCount), data.itemCellCount .. " item / " .. data.fluidCellCount .. " fluid", colors.green)
+    tile(tileW + gap + 1, y, tileW, "DRIVES", tostring(data.driveCount), data.itemTypes .. " item types", colors.yellow)
+    tile((tileW * 2) + (gap * 2) + 1, y, w - ((tileW * 2) + (gap * 2)), "CPUs", tostring(#data.cpus), data.busyCpuCount .. " busy", colors.cyan)
+    y = y + 4
+  end
+
+  if y <= bottom then
+    clearLine(y, colors.lightGray)
+    writeAt(2, y, "POWER", colors.black, colors.lightGray, w - 2)
+    y = y + 1
+    writeAt(2, y, "Stored", colors.lightGray, colors.black, 12)
+    writeAt(15, y, fmt(data.energy) .. " / " .. (data.energyCap > 0 and fmt(data.energyCap) or "?"), colors.white, colors.black, w - 15)
+    y = y + 1
+    writeAt(2, y, "Flow", colors.lightGray, colors.black, 12)
+    writeAt(15, y, fmt(data.input) .. "/t in   " .. fmt(data.usage) .. "/t used", colors.white, colors.black, w - 15)
+    y = y + 2
+  end
+
+  if y <= bottom then
+    clearLine(y, colors.lightGray)
+    writeAt(2, y, "CRAFTING CPUs", colors.black, colors.lightGray, w - 2)
+    y = y + 1
+    if #data.cpus == 0 then
+      writeAt(2, y, "No crafting CPU data exposed", colors.lightGray, colors.black, w - 2)
+      y = y + 1
+    else
+      for _, cpu in ipairs(data.cpus) do
+        if y > bottom - 2 then break end
+        local name = cleanLabel(firstField(cpu, {"name", "displayName"}, "Unnamed CPU"))
+        local storage = n(firstField(cpu, {"storage", "bytes"}, 0))
+        local co = n(firstField(cpu, {"coProcessors", "coprocessors"}, 0))
+        local busy = cpuBusy(cpu)
+        writeAt(2, y, name, busy and colors.cyan or colors.white, colors.black, math.max(8, w - 28))
+        writeAt(math.max(1, w - 26), y, (busy and "BUSY" or "IDLE") .. "  " .. fmt(storage) .. "B  " .. co .. " co", busy and colors.cyan or colors.lightGray, colors.black, 26)
+        y = y + 1
+      end
+    end
+  end
+
+  if y <= bottom then
+    y = math.max(y + 1, bottom - 1)
+    if y <= bottom then
+      writeAt(2, y, "v" .. VERSION .. "  |  refresh 3s  |  usage sample " .. SAMPLE_SECONDS .. "s", colors.lightGray, colors.black, w - 2)
+    end
+  end
+end
+
+local function renderScreen(target, data)
+  mon = target.device
+  local screen = target.name
+  local page = currentPages[screen] or "overview"
+  currentPages[screen] = page
+  uiButtons[screen] = {}
+  warningButtons[screen] = {}
+  bulkButtons[screen] = {}
+
+  mon.setBackgroundColor(colors.black)
+  mon.clear()
+  local _, h = mon.getSize()
+  drawHeader(screen, page, data)
+
+  if page == "crafting" then
+    renderCrafting(screen, data, h)
+  elseif page == "stock" then
+    renderStock(screen, data, h)
+  elseif page == "storage" then
+    renderStorage(screen, data, h)
+  elseif page == "system" then
+    renderSystem(screen, data, h)
+  else
+    renderOverview(screen, data, h)
+  end
+
+  drawNav(screen, page, h)
+end
+
 while true do
-  local items = callAny({"listItems", "getItems"}, {}) or {}
-  local fluids = callAny({"listFluid", "listFluids", "getFluids"}, {}) or {}
+  local items = callAnyArg({"listItems", "getItems"}, {}, {}) or {}
+  local fluids = callAnyArg({"listFluid", "listFluids", "getFluids"}, {}, {}) or {}
   local cells = callAny({"listCells", "getCells"}, {}) or {}
   local drives = call("getDrives", {}) or {}
-  local cpus = call("getCraftingCPUs", {}) or {}
-  local tasks = callAny({"getCraftingTasks", "listCraftingTasks"}, {}) or {}
+  local rawCpus = callAny({"getCraftingCPUs", "listCraftingCPUs"}, {}) or {}
+  local cpus = normalizeCpus(rawCpus)
+  local rawTasks = callAny({"getCraftingTasks", "listCraftingTasks"}, {}) or {}
+  local tasks = normalizeTasks(rawTasks, cpus)
 
   local itemTypes, itemCount = 0, 0
   local bulkIndex, bulkCellCount, bulkItemMatches = buildBulkIndex(cells, items)
   local top = {}
   local lowStock = {}
   for _, item in pairs(items) do
-    local a = amountOf(item)
-    if a > 0 then
+    local amount = amountOf(item)
+    if amount > 0 then
       itemTypes = itemTypes + 1
-      itemCount = itemCount + a
+      itemCount = itemCount + amount
       local label = itemLabel(item)
       local key = itemKey(item)
       if shouldWatchItem(key, label) then
-        top[#top + 1] = {key = key, name = label, amount = a, bulk = bulkIndex[key]}
+        top[#top + 1] = {key = key, name = label, amount = amount, bulk = bulkIndex[key]}
       end
-      local stockRule = atm10StockRule(key, label, a)
+      local stockRule = atm10StockRule(key, label, amount)
       if stockRule then
-        lowStock[#lowStock + 1] = {name = label, amount = a, priority = stockRule.priority, group = stockRule.label}
+        lowStock[#lowStock + 1] = {name = label, amount = amount, priority = stockRule.priority, group = stockRule.label}
       end
     end
   end
@@ -810,225 +1487,89 @@ while true do
   local energy = callAny({"getEnergyStorage", "getStoredEnergy"}, 0)
   local energyCap = callAny({"getMaxEnergyStorage", "getEnergyCapacity"}, 0)
   local usage = call("getEnergyUsage", 0)
-  local input = call("getAverageEnergyInput", 0)
+  local input = callAny({"getAverageEnergyInput", "getAvgPowerInjection"}, 0)
   local itemTypeTotal, fluidTypeTotal, itemCellCount, fluidCellCount = typeSlots(cells)
   local itemPct = pct(itemUsed, itemTotal)
   local typePct = pct(itemTypes, itemTypeTotal)
   local fluidPct = pct(fluidUsed, fluidTotal)
   local fluidTypePct = pct(fluidTypes, fluidTypeTotal)
   local powerPct = pct(energy, energyCap)
-  local jobs = countTable(tasks)
-  local health = "OK"
+
+  local busyCpuCount = 0
+  for _, cpu in pairs(cpus) do
+    if cpuBusy(cpu) then busyCpuCount = busyCpuCount + 1 end
+  end
+
+  local health = "SYSTEM OK"
   local healthColor = colors.green
-  local healthDetail = "storage stable"
+  local healthDetail = "storage, power, and stock stable"
   if itemPct >= 90 then
-    health, healthColor, healthDetail = "ITEMS FULL", colors.red, "add item storage"
+    health, healthColor, healthDetail = "ITEM STORAGE FULL", colors.red, "add item storage"
   elseif typePct >= 85 then
-    health, healthColor, healthDetail = "TYPES FULL", colors.red, "add type capacity"
+    health, healthColor, healthDetail = "TYPE SLOTS FULL", colors.red, "add type capacity"
   elseif powerPct > 0 and powerPct < 20 then
     health, healthColor, healthDetail = "LOW POWER", colors.red, "check energy input"
   elseif input > 0 and usage > input * 1.10 then
-    health, healthColor, healthDetail = "POWER DRAIN", colors.orange, fmt(usage) .. "/t use > " .. fmt(input) .. "/t in"
+    health, healthColor, healthDetail = "POWER DRAIN", colors.orange, fmt(usage) .. "/t used > " .. fmt(input) .. "/t input"
   elseif fluidPct >= 90 then
-    health, healthColor, healthDetail = "FLUIDS FULL", colors.orange, "add fluid storage"
+    health, healthColor, healthDetail = "FLUID STORAGE FULL", colors.orange, "add fluid storage"
   elseif fluidTypePct >= 85 then
-    health, healthColor, healthDetail = "FLUID TYPES", colors.orange, "add fluid type capacity"
+    health, healthColor, healthDetail = "FLUID TYPES FULL", colors.orange, "add fluid type capacity"
   elseif #warnings > 0 then
     health, healthColor, healthDetail = "MATERIAL DROP", colors.red, warnings[1].name
   elseif #recent > 0 then
     health, healthColor, healthDetail = "MATERIAL MOVING", colors.orange, recent[1].name
-  elseif jobs > 0 then
-    health, healthColor, healthDetail = "CRAFTING", colors.cyan, tostring(jobs) .. " job(s)"
+  elseif #tasks > 0 or busyCpuCount > 0 then
+    local detail = #tasks > 0 and (tostring(#tasks) .. " active job(s)") or (tostring(busyCpuCount) .. " CPU(s) busy; details unavailable")
+    health, healthColor, healthDetail = "CRAFTING", colors.cyan, detail
   end
+
+  local online = callAny({"isOnline", "isConnected"}, true)
+  local data = {
+    items = items,
+    fluids = fluids,
+    cells = cells,
+    drives = drives,
+    cellCount = countTable(cells),
+    driveCount = countTable(drives),
+    cpus = cpus,
+    tasks = tasks,
+    warnings = warnings,
+    recent = recent,
+    lowStock = lowStock,
+    top = top,
+    itemTypes = itemTypes,
+    itemCount = itemCount,
+    fluidTypes = fluidTypes,
+    fluidAmount = fluidAmount,
+    itemUsed = itemUsed,
+    itemTotal = itemTotal,
+    fluidUsed = fluidUsed,
+    fluidTotal = fluidTotal,
+    energy = energy,
+    energyCap = energyCap,
+    usage = usage,
+    input = input,
+    itemTypeTotal = itemTypeTotal,
+    fluidTypeTotal = fluidTypeTotal,
+    itemCellCount = itemCellCount,
+    fluidCellCount = fluidCellCount,
+    itemPct = itemPct,
+    typePct = typePct,
+    fluidPct = fluidPct,
+    fluidTypePct = fluidTypePct,
+    powerPct = powerPct,
+    bulkCellCount = bulkCellCount,
+    bulkItemMatches = bulkItemMatches,
+    busyCpuCount = busyCpuCount,
+    health = health,
+    healthColor = healthColor,
+    healthDetail = healthDetail,
+    online = online
+  }
 
   for _, target in ipairs(monitorTargets) do
-    mon = target.device
-    local screen = target.name
-    bulkButtons[screen] = {}
-    mon.setBackgroundColor(colors.black)
-    mon.clear()
-    local w, h = mon.getSize()
-    local barW = math.max(12, w - 15)
-    local tileW = math.floor((w - 4) / 3)
-    sectionButtons[screen] = {}
-    pageButtons[screen] = {}
-    storedPages[screen] = math.max(1, n(storedPages[screen] or 1))
-
-  local topCollapsed = isCollapsed(screen, "top")
-  local now = os.epoch and math.floor(os.epoch("utc") / 1000) or os.time()
-  local watchColor = colors.gray
-  if #warnings > 0 then watchColor = colors.red elseif #recent > 0 then watchColor = colors.orange end
-
-  clearLine(1, colors.cyan)
-  writeAt(2, 1, (topCollapsed and "[+] AE2 SUMMARY" or "[-] AE2 SYSTEM"), colors.black, colors.cyan, math.max(8, w - 25))
-  sectionButtons[screen][#sectionButtons[screen] + 1] = {x = 1, x2 = math.max(1, w - 6), y = 1, section = "top"}
-  updateButtons[screen] = {x = math.max(1, w - 4), x2 = w, y = 1}
-  writeAt(w - 4, 1, "UPD", colors.white, colors.blue, 3)
-  writeAt(w - 22, 1, textutils.formatTime(os.time(), true) .. " " .. itemTypes .. "I/" .. fluidTypes .. "F", colors.black, colors.cyan, 17)
-
-  local nextY
-  if topCollapsed then
-    clearLine(2, healthColor)
-    writeAt(2, 2, health .. " - " .. healthDetail, colors.black, healthColor, w - 2)
-    clearLine(3, colors.gray)
-    writeAt(2, 3, "Items " .. math.floor(itemPct + 0.5) .. "%  Types " .. math.floor(typePct + 0.5) .. "%  Fluids " .. math.floor(fluidPct + 0.5) .. "%  Power " .. math.floor(powerPct + 0.5) .. "%  Jobs " .. jobs, colors.black, colors.gray, w - 2)
-    clearLine(4, watchColor)
-    if statusMessage and now < statusUntil then
-      writeAt(2, 4, statusMessage, colors.black, watchColor, w - 2)
-    elseif #warnings > 0 then
-      writeAt(2, 4, "DROP: " .. warnings[1].name .. " -" .. fmt(warnings[1].drop) .. " left " .. fmt(warnings[1].left), colors.white, colors.red, w - 2)
-    elseif #recent > 0 then
-      writeAt(2, 4, "MOVING: " .. recent[1].name .. " -" .. fmt(recent[1].drop) .. " left " .. fmt(recent[1].left), colors.black, colors.orange, w - 2)
-    else
-      writeAt(2, 4, "v" .. VERSION .. "  CELLS " .. countTable(cells) .. "  CPUs " .. countTable(cpus) .. "  JOBS " .. jobs, colors.black, colors.gray, w - 2)
-    end
-    nextY = 5
-  else
-    tile(1, 3, tileW, "ITEMS", fmt(itemUsed) .. "/" .. (itemTotal > 0 and fmt(itemTotal) or "?"), fmt(itemCount) .. " stacks", colors.green)
-    tile(tileW + 3, 3, tileW, "TYPES", fmt(itemTypes) .. "/" .. (itemTypeTotal > 0 and fmt(itemTypeTotal) or "?"), itemCellCount .. " item cells", colors.yellow)
-    tile((tileW * 2) + 5, 3, math.max(10, w - ((tileW * 2) + 4)), "POWER", fmt(energy) .. "/" .. (energyCap > 0 and fmt(energyCap) or "?"), fmt(usage) .. "/t use " .. fmt(input) .. "/t in", colors.orange)
-
-    bar(1, 7, barW, "Items", itemUsed, itemTotal, colors.lime)
-    bar(1, 8, barW, "Types", itemTypes, itemTypeTotal, colors.yellow)
-    bar(1, 10, barW, "Fluids", fluidUsed, fluidTotal, colors.blue)
-    bar(1, 11, barW, "FTypes", fluidTypes, fluidTypeTotal, colors.cyan)
-    bar(1, 13, barW, "Power", energy, energyCap, colors.orange)
-
-    clearLine(15, healthColor)
-    writeAt(2, 15, health, colors.black, healthColor, 14)
-    writeAt(17, 15, healthDetail, colors.black, healthColor, w - 18)
-
-    clearLine(16, colors.gray)
-    if statusMessage and now < statusUntil then
-      writeAt(2, 16, statusMessage, colors.black, colors.gray, w - 2)
-    else
-      writeAt(2, 16, "v" .. VERSION .. "  CELLS " .. countTable(cells) .. "  DRIVES " .. countTable(drives) .. "  CPUs " .. countTable(cpus) .. "  JOBS " .. jobs .. "  FLUID CELLS " .. fluidCellCount, colors.black, colors.gray)
-    end
-
-    clearLine(17, watchColor)
-    if #warnings > 0 then
-      writeAt(2, 17, "CONFIRMED MATERIAL DROPS", colors.white, colors.red)
-    elseif #recent > 0 then
-      writeAt(2, 17, "MATERIALS MOVING - confirmed samples", colors.black, colors.orange)
-    else
-      writeAt(2, 17, "WATCH: repeated real count drops only", colors.black, colors.gray)
-    end
-    nextY = 18
-  end
-
-  if #warnings > 0 then
-    warningButtons[screen] = {}
-    for i = 1, math.min(#warnings, 3) do
-      clearLine(nextY, colors.black)
-      local buttonX = math.max(1, w - 5)
-      local nameW = math.max(8, w - 31)
-      writeAt(1, nextY, string.sub(warnings[i].name, 1, nameW), colors.red, colors.black, nameW)
-      writeAt(math.max(1, w - 24), nextY, "-" .. fmt(warnings[i].drop) .. " left " .. fmt(warnings[i].left), colors.yellow, colors.black, 18)
-      fillRect(buttonX, nextY, 6, 1, colors.gray)
-      writeAt(buttonX + 1, nextY, "IGN", colors.white, colors.gray, 3)
-      warningButtons[screen][#warningButtons[screen] + 1] = {x = buttonX, x2 = w, y = nextY, key = warnings[i].key, name = warnings[i].name}
-      nextY = nextY + 1
-    end
-  elseif #recent > 0 then
-    warningButtons[screen] = {}
-    for i = 1, math.min(#recent, 3) do
-      clearLine(nextY, colors.black)
-      local nameW = math.max(8, w - 22)
-      writeAt(1, nextY, string.sub(recent[i].name, 1, nameW), colors.orange, colors.black, nameW)
-      writeAt(math.max(1, w - 19), nextY, "-" .. fmt(recent[i].drop) .. " left " .. fmt(recent[i].left), colors.yellow, colors.black, 19)
-      nextY = nextY + 1
-    end
-  else
-    warningButtons[screen] = {}
-  end
-
-  clearLine(nextY, colors.lightGray)
-  local watchCollapsed = isCollapsed(screen, "watch")
-  local watchPrefix = watchCollapsed and "[+] " or "[-] "
-  writeAt(2, nextY, watchPrefix .. "ATM10 WATCH STOCK", colors.black, colors.lightGray, w - 2)
-  sectionButtons[screen][#sectionButtons[screen] + 1] = {x = 1, x2 = w, y = nextY, section = "watch"}
-  nextY = nextY + 1
-
-  if watchCollapsed then
-    clearLine(nextY, colors.black)
-    writeAt(1, nextY, tostring(#lowStock) .. " watched bottleneck(s) hidden", colors.lightGray, colors.black, w)
-    nextY = nextY + 1
-  elseif #lowStock == 0 then
-    clearLine(nextY, colors.black)
-    writeAt(1, nextY, "No watched ATM10 bottlenecks low", colors.lightGray, colors.black, w)
-    nextY = nextY + 1
-  else
-    local lowRows = h < 25 and 3 or 4
-    for i = 1, math.min(#lowStock, lowRows) do
-      local amountText = fmt(lowStock[i].amount)
-      local amountW = math.max(8, #amountText)
-      local nameW = math.max(8, w - amountW - 2)
-      clearLine(nextY, colors.black)
-      writeAt(1, nextY, string.sub(lowStock[i].name, 1, nameW), colors.yellow, colors.black, nameW)
-      writeAt(w - amountW + 1, nextY, amountText, colors.white, colors.black, amountW)
-      nextY = nextY + 1
-    end
-  end
-
-  if nextY < h then
-    nextY = nextY + 1
-  end
-
-  if nextY <= h then
-    clearLine(nextY, colors.lightGray)
-    local storedCollapsed = isCollapsed(screen, "stored")
-    local storedPrefix = storedCollapsed and "[+] " or "[-] "
-    local rowsAvailable = math.max(0, h - nextY)
-    local pageCount = math.max(1, math.ceil(#top / math.max(1, rowsAvailable)))
-    if storedPages[screen] > pageCount then storedPages[screen] = pageCount end
-    local storedPage = storedPages[screen]
-    local bulkTitle = bulkCellCount > 0 and ("BIGGEST STORED ITEMS  BULK " .. bulkItemMatches .. " CELLS " .. bulkCellCount) or "BIGGEST STORED ITEMS"
-    local titleW = w - 2
-    if not storedCollapsed and pageCount > 1 then titleW = math.max(8, w - 24) end
-    writeAt(2, nextY, storedPrefix .. bulkTitle, colors.black, colors.lightGray, titleW)
-    sectionButtons[screen][#sectionButtons[screen] + 1] = {x = 1, x2 = titleW + 1, y = nextY, section = "stored"}
-    if not storedCollapsed and pageCount > 1 then
-      local prevX = math.max(1, w - 20)
-      local nextX = math.max(1, w - 5)
-      writeAt(prevX, nextY, "PREV", storedPage > 1 and colors.white or colors.gray, colors.blue, 4)
-      writeAt(math.max(1, w - 14), nextY, "P" .. storedPage .. "/" .. pageCount, colors.black, colors.lightGray, 8)
-      writeAt(nextX, nextY, "NEXT", storedPage < pageCount and colors.white or colors.gray, colors.blue, 4)
-      if storedPage > 1 then pageButtons[screen][#pageButtons[screen] + 1] = {x = prevX, x2 = prevX + 3, y = nextY, delta = -1} end
-      if storedPage < pageCount then pageButtons[screen][#pageButtons[screen] + 1] = {x = nextX, x2 = nextX + 3, y = nextY, delta = 1} end
-    end
-    nextY = nextY + 1
-
-    if storedCollapsed then
-      clearLine(nextY, colors.black)
-      writeAt(1, nextY, tostring(#top) .. " stored item(s) hidden", colors.lightGray, colors.black, w)
-    else
-      local y = nextY
-      local listRows = math.max(0, h - y + 1)
-      local startIndex = ((storedPage - 1) * listRows) + 1
-      local endIndex = math.min(#top, startIndex + listRows - 1)
-      for i = startIndex, endIndex do
-      local amount = top[i].amount
-      local amountText = fmt(amount)
-      local marker = top[i].bulk and "BULK" or "B+"
-      local markerW = 5
-      local amountW = math.max(8, #amountText)
-      local nameW = math.max(8, w - amountW - markerW - 2)
-      local rowBg = top[i].bulk and colors.purple or colors.black
-      local nameColor = colors.white
-      if i > 8 then nameColor = colors.lightGray end
-      if top[i].bulk then nameColor = colors.white end
-      clearLine(y, rowBg)
-      writeAt(1, y, string.sub(top[i].name, 1, nameW), nameColor, rowBg, nameW)
-      local markerX = math.max(1, w - amountW - markerW + 1)
-      local markerColor = colors.gray
-      if top[i].bulk then markerColor = colors.white end
-      writeAt(markerX, y, marker, markerColor, rowBg, markerW)
-      bulkButtons[screen][#bulkButtons[screen] + 1] = {x = markerX, x2 = markerX + markerW - 1, y = y, key = top[i].key, name = top[i].name}
-      writeAt(w - amountW + 1, y, amountText, colors.white, rowBg, amountW)
-      y = y + 1
-      end
-    end
-  end
+    renderScreen(target, data)
   end
 
   local timer = os.startTimer(3)
@@ -1039,6 +1580,8 @@ while true do
     elseif event == "monitor_touch" and handleTouch(a, b, c) then
       break
     elseif event == "mouse_click" and handleTouch("terminal", b, c) then
+      break
+    elseif event == "monitor_resize" then
       break
     end
   end
