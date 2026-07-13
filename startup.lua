@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-13.3"
+local VERSION = "2026-07-13.4"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -545,6 +545,7 @@ local toolBusy = false
 local lastPasteUrl = nil
 local lastPasteError = nil
 local lastDumpSize = 0
+local powerStats = {trendReady = false, netPerSecond = 0, netPerTick = 0, netPerMinute = 0, eta = 0, etaMode = nil}
 
 if fs.exists(LAST_PASTE_FILE) then
   local h = fs.open(LAST_PASTE_FILE, "r")
@@ -1287,6 +1288,39 @@ local function capacityRow(y, label, used, total, color)
   writeAt(w - rightW + 1, y, value .. " " .. pctText, colors.white, colors.black, rightW)
 end
 
+local function signedFmt(value)
+  value = n(value)
+  local sign = value >= 0 and "+" or "-"
+  return sign .. fmt(math.abs(value))
+end
+
+local function rateFmt(value, suffix)
+  value = n(value)
+  if value == 0 then return "--" .. suffix end
+  local mag = math.abs(value)
+  local text
+  if mag < 1 then
+    text = string.format("%.2f", mag)
+  elseif mag < 10 then
+    text = string.format("%.1f", mag)
+  else
+    text = fmt(mag)
+  end
+  return (value >= 0 and "+" or "-") .. text .. suffix
+end
+
+local function powerTrendText(stats)
+  if not stats or not stats.trendReady then return "trend learning" end
+  return rateFmt(stats.netPerTick, " FE/t") .. "  " .. rateFmt(stats.netPerMinute, " FE/m")
+end
+
+local function powerEtaText(stats)
+  if not stats or not stats.trendReady or n(stats.eta) <= 0 then return nil end
+  if stats.etaMode == "full" then return "Full in " .. duration(stats.eta) end
+  if stats.etaMode == "empty" then return "Empty in " .. duration(stats.eta) end
+  return nil
+end
+
 local function statusIsActive()
   return statusMessage and nowSeconds() < statusUntil
 end
@@ -1359,14 +1393,24 @@ local function renderOverview(screen, data, h)
     local tileW = math.floor((w - (gap * 2)) / 3)
     tile(1, y, tileW, "ITEM STORAGE", math.floor(data.itemPct + 0.5) .. "%", fmt(data.itemUsed) .. " / " .. (data.itemTotal > 0 and fmt(data.itemTotal) or "?"), colors.green)
     tile(tileW + gap + 1, y, tileW, "TYPE SLOTS", math.floor(data.typePct + 0.5) .. "%", data.itemTypes .. " / " .. (data.itemTypeTotal > 0 and data.itemTypeTotal or "?"), colors.yellow)
-    tile((tileW * 2) + (gap * 2) + 1, y, w - ((tileW * 2) + (gap * 2)), "POWER", math.floor(data.powerPct + 0.5) .. "%", fmt(data.usage) .. "/t use", colors.orange)
+    tile((tileW * 2) + (gap * 2) + 1, y, w - ((tileW * 2) + (gap * 2)), "FE STORED", math.floor(data.powerPct + 0.5) .. "%", powerTrendText(data.powerStats), colors.orange)
     y = y + 4
   end
 
   capacityRow(y, "Items", data.itemUsed, data.itemTotal, colors.lime); y = y + 1
   capacityRow(y, "Types", data.itemTypes, data.itemTypeTotal, colors.yellow); y = y + 1
   capacityRow(y, "Fluids", data.fluidUsed, data.fluidTotal, colors.blue); y = y + 1
-  capacityRow(y, "Power", data.energy, data.energyCap, colors.orange); y = y + 2
+  capacityRow(y, "FE Store", data.energy, data.energyCap, colors.orange); y = y + 1
+  if y <= bottom then
+    local etaText = powerEtaText(data.powerStats)
+    local rightText = etaText or (fmt(data.usage) .. "/t bridge use")
+    writeAt(2, y, "FE Trend", colors.lightGray, colors.black, 12)
+    writeAt(15, y, powerTrendText(data.powerStats), data.powerStats and data.powerStats.netPerSecond < 0 and colors.orange or colors.lime, colors.black, math.max(8, w - #rightText - 18))
+    writeAt(math.max(1, w - #rightText + 1), y, rightText, etaText and colors.yellow or colors.lightGray, colors.black, #rightText)
+    y = y + 2
+  else
+    y = y + 1
+  end
 
   if y <= bottom then
     clearLine(y, colors.lightGray)
@@ -1651,27 +1695,6 @@ local function renderStorage(screen, data, h)
   end
 end
 
-local function signedFmt(value)
-  value = n(value)
-  local sign = value >= 0 and "+" or "-"
-  return sign .. fmt(math.abs(value))
-end
-
-local function rateFmt(value, suffix)
-  value = n(value)
-  if value == 0 then return "--" .. suffix end
-  local mag = math.abs(value)
-  local text
-  if mag < 1 then
-    text = string.format("%.2f", mag)
-  elseif mag < 10 then
-    text = string.format("%.1f", mag)
-  else
-    text = fmt(mag)
-  end
-  return (value >= 0 and "+" or "-") .. text .. suffix
-end
-
 local function renderMovers(screen, data, h)
   local w = mon.getSize()
   local bottom = h - 1
@@ -1755,18 +1778,24 @@ local function renderSystem(screen, data, h)
 
   if y <= bottom then
     clearLine(y, colors.lightGray)
-    writeAt(2, y, "POWER", colors.black, colors.lightGray, w - 2)
+    writeAt(2, y, "FE POWER", colors.black, colors.lightGray, w - 2)
     y = y + 1
     writeAt(2, y, "Stored", colors.lightGray, colors.black, 12)
-    writeAt(15, y, fmt(data.energy) .. " / " .. (data.energyCap > 0 and fmt(data.energyCap) or "?"), colors.white, colors.black, w - 15)
+    writeAt(15, y, fmt(data.energy) .. " / " .. (data.energyCap > 0 and fmt(data.energyCap) or "?") .. " FE  (" .. math.floor(data.powerPct + 0.5) .. "%)", colors.white, colors.black, w - 15)
     y = y + 1
-    writeAt(2, y, "Flow", colors.lightGray, colors.black, 12)
-    local netText = (data.powerNet >= 0 and "+" or "") .. fmt(data.powerNet) .. "/t net"
-    writeAt(15, y, fmt(data.input) .. "/t in  " .. fmt(data.usage) .. "/t used  " .. netText, colors.white, colors.black, w - 15)
+    writeAt(2, y, "Trend", colors.lightGray, colors.black, 12)
+    writeAt(15, y, powerTrendText(data.powerStats), data.powerStats and data.powerStats.netPerSecond < 0 and colors.orange or colors.lime, colors.black, w - 15)
     y = y + 1
-    if data.powerNet < 0 and data.powerBufferSeconds > 0 then
-      writeAt(2, y, "Buffer", colors.lightGray, colors.black, 12)
-      writeAt(15, y, "~" .. duration(data.powerBufferSeconds) .. " at current drain", colors.orange, colors.black, w - 15)
+    local etaText = powerEtaText(data.powerStats)
+    if etaText and y <= bottom then
+      writeAt(2, y, "Estimate", colors.lightGray, colors.black, 12)
+      writeAt(15, y, etaText, colors.yellow, colors.black, w - 15)
+      y = y + 1
+    end
+    if y <= bottom then
+      writeAt(2, y, "Bridge", colors.lightGray, colors.black, 12)
+      local netText = (data.powerNet >= 0 and "+" or "") .. fmt(data.powerNet) .. "/t net"
+      writeAt(15, y, fmt(data.input) .. "/t in  " .. fmt(data.usage) .. "/t used  " .. netText, colors.white, colors.black, w - 15)
       y = y + 1
     end
     y = y + 1
@@ -1888,6 +1917,40 @@ local function renderScreen(target, data)
   drawNav(screen, page, h)
 end
 
+local function updatePowerStats(energy, energyCap)
+  local now = nowSeconds()
+  local stored = n(energy)
+  local cap = n(energyCap)
+
+  if powerStats.lastEnergy ~= nil and powerStats.lastTime ~= nil and now > powerStats.lastTime then
+    local elapsed = now - powerStats.lastTime
+    local instantPerSecond = (stored - n(powerStats.lastEnergy)) / elapsed
+    if powerStats.trendReady then
+      powerStats.netPerSecond = (n(powerStats.netPerSecond) * 0.70) + (instantPerSecond * 0.30)
+    else
+      powerStats.netPerSecond = instantPerSecond
+      powerStats.trendReady = true
+    end
+    powerStats.netPerTick = powerStats.netPerSecond / 20
+    powerStats.netPerMinute = powerStats.netPerSecond * 60
+
+    if powerStats.netPerSecond > 0 and cap > stored then
+      powerStats.eta = (cap - stored) / powerStats.netPerSecond
+      powerStats.etaMode = "full"
+    elseif powerStats.netPerSecond < 0 and stored > 0 then
+      powerStats.eta = stored / math.abs(powerStats.netPerSecond)
+      powerStats.etaMode = "empty"
+    else
+      powerStats.eta = 0
+      powerStats.etaMode = nil
+    end
+  end
+
+  powerStats.lastEnergy = stored
+  powerStats.lastTime = now
+  return powerStats
+end
+
 while true do
   local items = callAnyArg({"listItems", "getItems"}, {}, {}) or {}
   local fluids = callAnyArg({"listFluid", "listFluids", "getFluids"}, {}, {}) or {}
@@ -1942,6 +2005,7 @@ while true do
   local energyCap = callAny({"getMaxEnergyStorage", "getEnergyCapacity"}, 0)
   local usage = call("getEnergyUsage", 0)
   local input = callAny({"getAverageEnergyInput", "getAvgPowerInjection"}, 0)
+  local currentPowerStats = updatePowerStats(energy, energyCap)
   local itemTypeTotal, fluidTypeTotal, itemCellCount, fluidCellCount = typeSlots(cells)
   local itemPct = pct(itemUsed, itemTotal)
   local typePct = pct(itemTypes, itemTypeTotal)
@@ -1967,9 +2031,9 @@ while true do
   elseif typePct >= 85 then
     health, healthColor, healthDetail = "TYPE SLOTS FULL", colors.red, "add type capacity"
   elseif powerPct > 0 and powerPct < 20 then
-    health, healthColor, healthDetail = "LOW POWER", colors.red, "check energy input"
-  elseif powerNet < 0 and powerBufferSeconds > 0 and powerBufferSeconds < 1800 then
-    health, healthColor, healthDetail = "POWER DRAIN", colors.orange, "~" .. duration(powerBufferSeconds) .. " buffer remaining"
+    health, healthColor, healthDetail = "LOW FE", colors.red, "stored FE " .. math.floor(powerPct + 0.5) .. "%"
+  elseif currentPowerStats.trendReady and currentPowerStats.etaMode == "empty" and currentPowerStats.eta > 0 and currentPowerStats.eta < 1800 then
+    health, healthColor, healthDetail = "FE DRAIN", colors.orange, "empty in " .. duration(currentPowerStats.eta)
   elseif fluidPct >= 90 then
     health, healthColor, healthDetail = "FLUID STORAGE FULL", colors.orange, "add fluid storage"
   elseif fluidTypePct >= 85 then
@@ -2012,6 +2076,7 @@ while true do
     energyCap = energyCap,
     usage = usage,
     input = input,
+    powerStats = currentPowerStats,
     powerNet = powerNet,
     powerBufferSeconds = powerBufferSeconds,
     itemTypeTotal = itemTypeTotal,

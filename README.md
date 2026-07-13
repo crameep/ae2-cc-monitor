@@ -16,11 +16,12 @@ reboot
 
 The bottom row is a persistent touch navigation bar:
 
-- **Overview** — health, storage, power, active crafting, and the most important alert.
+- **Overview** — health, storage, FE stored/trend, active crafting, and the most important alert.
 - **Crafting** — active AE2 crafting jobs, progress, crafted quantity, sampled rate, ETA, CPU, bytes, and subpart information when Advanced Peripherals exposes it.
 - **Stock** — confirmed material drops, recent use, ATM10 bottleneck warnings, and `IGN` controls.
 - **Storage** — paged largest-item list and manual/automatic bulk-cell markers.
-- **System** — grid status, cells, drives, power flow, crafting CPUs, version, and updater.
+- **Movers** — recent item deltas sorted by movement rate, with per-minute and per-hour estimates.
+- **System** — grid status, cells, drives, FE storage/trend, bridge power flow, crafting CPUs, version, and updater.
 - **Tools** — one-touch AE2 diagnostic generation and optional Pastebin upload, with the latest link shown on the monitor.
 
 Each attached monitor remembers its own selected page while the script is running.
@@ -72,9 +73,9 @@ reboot
 
 The bottom navigation uses fixed-width slots so the page labels stay aligned on small monitors:
 
-`HOME` / `CRAFT` / `STOCK` / `STORE` / `SYS` / `MORE`
+`HOME` / `CRAFT` / `STOCK` / `STORE` / `MOVE` / `SYS` / `MORE`
 
-On wider monitors the labels expand to `OVERVIEW`, `CRAFTING`, `STOCK`, `STORAGE`, `SYSTEM`, and `TOOLS`.
+On wider monitors the labels expand to `OVERVIEW`, `CRAFT`, `STOCK`, `STORAGE`, `MOVERS`, `SYSTEM`, and `TOOLS`.
 
 The `MORE` / `TOOLS` page includes the AE2 diagnostic dumper. It downloads `ae2-dump.lua` from this repository when needed and can keep the last Pastebin link on the computer.
 
