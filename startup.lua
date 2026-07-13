@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-13.1"
+local VERSION = "2026-07-13.2"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -1584,22 +1584,28 @@ local function renderStorage(screen, data, h)
   local w = mon.getSize()
   local bottom = h - 1
   local y = 3
-  local rowsAvailable = math.max(1, bottom - y)
+  local headerRows = 2
+  local rowsAvailable = math.max(1, bottom - (y + headerRows) + 1)
   local pageCount = math.max(1, math.ceil(#data.top / rowsAvailable))
   listPages[screen] = listPages[screen] or {}
   local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen].storage or 1)))
   listPages[screen].storage = pageNumber
+  local amountW = w >= 64 and 12 or 10
+  local markerW = 6
+  local amountX = math.max(1, w - amountW + 1)
+  local markerX = math.max(1, amountX - markerW - 1)
+  local itemW = math.max(8, markerX - 3)
 
   clearLine(y, colors.black)
   local bulkText = data.bulkAutoAvailable and (data.bulkItemMatches .. " bulk-marked") or (data.bulkItemMatches .. " manual bulk | auto unavailable")
-  writeAt(2, y, #data.top .. " item types  |  " .. bulkText .. "  |  " .. data.nearFullCellCount .. " cells >95%", colors.lightGray, colors.black, math.max(8, w - 24))
+  writeAt(2, y, #data.top .. " item types  |  " .. bulkText .. "  |  " .. data.nearFullCellCount .. " cells >95%", colors.lightGray, colors.black, math.max(8, markerX - 4))
   pageControls(screen, "storage", y, pageNumber, pageCount)
   y = y + 1
 
   clearLine(y, colors.lightGray)
-  writeAt(2, y, "ITEM", colors.black, colors.lightGray, math.max(8, w - 22))
-  writeAt(math.max(1, w - 19), y, "CELL", colors.black, colors.lightGray, 5)
-  writeAt(math.max(1, w - 11), y, "AMOUNT", colors.black, colors.lightGray, 10)
+  writeAt(2, y, "ITEM", colors.black, colors.lightGray, itemW)
+  writeAt(markerX, y, "CELL", colors.black, colors.lightGray, markerW)
+  writeAt(amountX, y, "AMOUNT", colors.black, colors.lightGray, amountW)
   y = y + 1
 
   if #data.top == 0 then
@@ -1615,11 +1621,11 @@ local function renderStorage(screen, data, h)
     local marker = row.bulk and "BULK" or "B+"
     local rowBg = row.bulk and colors.purple or ((i % 2 == 0) and colors.gray or colors.black)
     clearLine(y, rowBg)
-    writeAt(2, y, row.name, colors.white, rowBg, math.max(8, w - #amountText - 10))
-    local markerX = math.max(1, w - #amountText - 7)
-    writeAt(markerX, y, marker, row.bulk and colors.white or colors.lightGray, rowBg, 5)
-    registerButton(screen, {x = markerX, x2 = markerX + 4, y = y, action = "bulk", key = row.key, name = row.name})
-    writeAt(math.max(1, w - #amountText), y, amountText, colors.white, rowBg, #amountText)
+    local amountCell = string.rep(" ", math.max(0, amountW - #amountText)) .. amountText
+    writeAt(2, y, row.name, colors.white, rowBg, itemW)
+    writeAt(markerX, y, marker, row.bulk and colors.white or colors.lightGray, rowBg, markerW)
+    registerButton(screen, {x = markerX, x2 = markerX + markerW - 1, y = y, action = "bulk", key = row.key, name = row.name})
+    writeAt(amountX, y, amountCell, colors.white, rowBg, amountW)
     y = y + 1
   end
 end
