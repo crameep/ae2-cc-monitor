@@ -25,14 +25,14 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-09.4"
+local VERSION = "2026-07-13.1"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
 local DUMP_SCRIPT = "ae2-dump.lua"
 local DUMP_FILE = "ae2-dump.txt"
 local LAST_PASTE_FILE = ".ae2_last_paste"
-local PASTEBIN_DEV_KEY = "0ec2eb25b6166c0c27a394ae118ad829"
+local PASTEBIN_KEY_FILE = ".ae2_pastebin_key"
 local STATE_FILE = ".ae2_usage_state"
 local BULK_HINTS_FILE = ".ae2_bulk_items"
 local SAMPLE_SECONDS = 90
@@ -678,8 +678,21 @@ local function downloadDumpScript()
   return true
 end
 
+local function loadPastebinKey()
+  if not fs.exists(PASTEBIN_KEY_FILE) then return nil end
+  local h = fs.open(PASTEBIN_KEY_FILE, "r")
+  if not h then return nil end
+  local key = h.readAll() or ""
+  h.close()
+  key = string.gsub(key, "%s+", "")
+  if key == "" then return nil end
+  return key
+end
+
 local function uploadDumpToPastebin()
   if not http or not http.post then return nil, "HTTP POST is disabled" end
+  local pastebinKey = loadPastebinKey()
+  if not pastebinKey then return nil, "Missing " .. PASTEBIN_KEY_FILE end
   if not fs.exists(DUMP_FILE) or fs.isDir(DUMP_FILE) then return nil, "Diagnostic file was not created" end
   local h = fs.open(DUMP_FILE, "r")
   if not h then return nil, "Cannot read " .. DUMP_FILE end
@@ -691,7 +704,7 @@ local function uploadDumpToPastebin()
   local response, err = http.post(
     "https://pastebin.com/api/api_post.php",
     "api_option=paste&" ..
-    "api_dev_key=" .. PASTEBIN_DEV_KEY .. "&" ..
+    "api_dev_key=" .. textutils.urlEncode(pastebinKey) .. "&" ..
     "api_paste_format=lua&" ..
     "api_paste_name=" .. textutils.urlEncode("AE2 diagnostic " .. tostring(os.getComputerID())) .. "&" ..
     "api_paste_code=" .. textutils.urlEncode(body)
@@ -1266,32 +1279,36 @@ local function drawHeader(screen, page, data)
 
   local stripColor = data.healthColor
   clearLine(2, stripColor)
-  local message
   if statusIsActive() then
-    message = statusMessage
+    writeAt(2, 2, statusMessage, colors.black, stripColor, w - 2)
   else
-    message = data.health .. "  |  " .. data.healthDetail
+    local labelW = math.min(18, math.max(10, math.floor(w * 0.30)))
+    writeAt(2, 2, data.health, colors.black, stripColor, labelW)
+    writeAt(labelW + 3, 2, data.healthDetail, colors.black, stripColor, math.max(1, w - labelW - 3))
   end
-  writeAt(2, 2, message, colors.black, stripColor, w - 2)
 end
 
 local function drawNav(screen, page, h)
   local w = mon.getSize()
   local labels = w >= 68
     and {"OVERVIEW", "CRAFTING", "STOCK", "STORAGE", "SYSTEM", "TOOLS"}
-    or {"HOME", "CRAFT", "STOCK", "STORE", "SYS", "TOOLS"}
+    or {"HOME", "CRAFT", "STOCK", "STORE", "SYS", "MORE"}
+  local tabCount = #PAGE_ORDER
+  local baseW = math.max(1, math.floor(w / tabCount))
+  local extra = w - (baseW * tabCount)
   local x = 1
   for i, pageName in ipairs(PAGE_ORDER) do
-    local remaining = w - x + 1
-    local remainingTabs = #PAGE_ORDER - i + 1
-    local tabW = math.floor(remaining / remainingTabs)
-    local x2 = i == #PAGE_ORDER and w or x + tabW - 1
+    local tabW = baseW
+    if i <= extra then tabW = tabW + 1 end
+    local x2 = i == tabCount and w or math.min(w, x + tabW - 1)
     local active = pageName == page
     local bg = active and colors.cyan or colors.gray
     local fg = active and colors.black or colors.white
-    fillRect(x, h, x2 - x + 1, 1, bg)
+    local width = math.max(1, x2 - x + 1)
+    fillRect(x, h, width, 1, bg)
     local label = labels[i]
-    local labelX = x + math.max(0, math.floor(((x2 - x + 1) - #label) / 2))
+    if #label > width then label = string.sub(label, 1, width) end
+    local labelX = x + math.max(0, math.floor((width - #label) / 2))
     writeAt(labelX, h, label, fg, bg, x2 - labelX + 1)
     registerButton(screen, {x = x, x2 = x2, y = h, action = "nav", page = pageName})
     x = x2 + 1
@@ -1701,7 +1718,7 @@ local function renderTools(screen, data, h)
     y = y + 1
   end
   if y <= bottom then
-    writeAt(2, y, "ae2-dump.txt and keeps the last Pastebin link.", colors.lightGray, colors.black, w - 2)
+    writeAt(2, y, "ae2-dump.txt and uploads if " .. PASTEBIN_KEY_FILE .. " exists.", colors.lightGray, colors.black, w - 2)
     y = y + 2
   end
 

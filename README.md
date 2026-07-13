@@ -68,6 +68,18 @@ wget https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua s
 reboot
 ```
 
+## Pages
+
+The bottom navigation uses fixed-width slots so the page labels stay aligned on small monitors:
+
+`HOME` / `CRAFT` / `STOCK` / `STORE` / `SYS` / `MORE`
+
+On wider monitors the labels expand to `OVERVIEW`, `CRAFTING`, `STOCK`, `STORAGE`, `SYSTEM`, and `TOOLS`.
+
+The `MORE` / `TOOLS` page includes the AE2 diagnostic dumper. It downloads `ae2-dump.lua` from this repository when needed and can keep the last Pastebin link on the computer.
+
+Pastebin upload needs a local `.ae2_pastebin_key` file on the ComputerCraft computer. The key is intentionally not stored in this repository.
+
 ## Multiple Monitors
 
 One connected monitor wall is exposed by CC:Tweaked as one large monitor. Separate attached monitors each render the dashboard and can be navigated independently.
