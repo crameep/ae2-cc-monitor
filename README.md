@@ -21,7 +21,7 @@ The bottom row is a persistent touch navigation bar:
 - **Stock** — confirmed material drops, recent use, ATM10 bottleneck warnings, and `IGN` controls.
 - **Storage** — paged largest-item list and manual/automatic bulk-cell markers.
 - **System** — grid status, cells, drives, power flow, crafting CPUs, version, and updater.
-- **Tools** — one-touch AE2 diagnostic generation and Pastebin upload, with the latest link shown on the monitor.
+- **Tools** — one-touch AE2 diagnostic generation and optional Pastebin upload, with the latest link shown on the monitor.
 
 Each attached monitor remembers its own selected page while the script is running.
 
@@ -58,7 +58,7 @@ Open **System** and tap `UPDATE`. The script downloads the latest `startup.lua` 
 
 ## Tools and diagnostic upload
 
-Open **Tools** and tap `CREATE + UPLOAD AE2 DUMP`. The dashboard downloads the latest `ae2-dump.lua`, collects a one-shot read-only snapshot, saves `ae2-dump.txt`, uploads it to Pastebin, and displays the resulting URL and paste code. The last successful URL is saved in `.ae2_last_paste`.
+Open **Tools** and tap `CREATE + UPLOAD AE2 DUMP`. The dashboard downloads the latest `ae2-dump.lua`, collects a one-shot read-only snapshot, saves `ae2-dump.txt`, uploads it to Pastebin when `.ae2_pastebin_key` exists, and displays the resulting URL and paste code. The last successful URL is saved in `.ae2_last_paste`.
 
 Manual update:
 
