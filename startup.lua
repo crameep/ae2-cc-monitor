@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-13.2"
+local VERSION = "2026-07-13.3"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -515,6 +515,7 @@ local function loadState()
     data.recentCandidates = data.recentCandidates or {}
     data.ignored = data.ignored or {}
     data.lastSample = data.lastSample or 0
+    data.movers = data.movers or {}
     return data
   end
   return {last = {}, tracked = {}, warnings = {}, ignored = {}, stateVersion = STATE_VERSION, lastSample = 0}
@@ -554,12 +555,13 @@ if fs.exists(LAST_PASTE_FILE) then
   end
 end
 
-local PAGE_ORDER = {"overview", "crafting", "stock", "storage", "system", "tools"}
+local PAGE_ORDER = {"overview", "crafting", "stock", "storage", "movers", "system", "tools"}
 local PAGE_TITLES = {
   overview = "OVERVIEW",
   crafting = "CRAFTING",
   stock = "STOCK WATCH",
   storage = "STORAGE",
+  movers = "MOVERS",
   system = "SYSTEM",
   tools = "TOOLS"
 }
@@ -806,12 +808,14 @@ local function updateUsage(items)
   local now = nowSeconds()
   if usageState.lastSample and now - usageState.lastSample < SAMPLE_SECONDS then
     usageState.warnings = filteredWarnings(usageState.warnings)
-    return usageState.warnings or {}, usageState.recent or {}
+    return usageState.warnings or {}, usageState.recent or {}, usageState.movers or {}
   end
 
   local current = {}
   local warnings = {}
   local recent = {}
+  local movers = {}
+  local elapsed = math.max(1, now - n(usageState.lastSample))
   usageState.recentCandidates = usageState.recentCandidates or {}
   for _, item in pairs(items or {}) do
     local key = itemKey(item)
@@ -821,6 +825,18 @@ local function updateUsage(items)
       local prior = usageState.last[key]
       local label = itemLabel(item)
       local watchable = shouldWatchItem(key, label)
+      if prior and amount ~= prior then
+        local delta = amount - prior
+        movers[#movers + 1] = {
+          key = key,
+          name = label,
+          delta = delta,
+          amount = amount,
+          perMinute = delta / elapsed * 60,
+          perHour = delta / elapsed * 3600,
+          score = math.abs(delta / elapsed)
+        }
+      end
       if prior and not usageState.ignored[key] and watchable then
         local tracked = usageState.tracked[key] or {name = label, consumed = 0, lastDrop = 0, left = amount, samples = 0, dropEvents = 0}
         tracked.name = label
@@ -902,13 +918,18 @@ local function updateUsage(items)
 
   table.sort(warnings, function(a, b) return a.score > b.score end)
   table.sort(recent, function(a, b) return a.score > b.score end)
+  table.sort(movers, function(a, b)
+    if a.score ~= b.score then return a.score > b.score end
+    return a.name < b.name
+  end)
   usageState.stateVersion = STATE_VERSION
   usageState.last = current
   usageState.lastSample = now
   usageState.warnings = warnings
   usageState.recent = recent
+  usageState.movers = movers
   saveState(usageState)
-  return warnings, recent
+  return warnings, recent, movers
 end
 
 local function duration(seconds)
@@ -1291,8 +1312,8 @@ end
 local function drawNav(screen, page, h)
   local w = mon.getSize()
   local labels = w >= 68
-    and {"OVERVIEW", "CRAFTING", "STOCK", "STORAGE", "SYSTEM", "TOOLS"}
-    or {"HOME", "CRAFT", "STOCK", "STORE", "SYS", "MORE"}
+    and {"OVERVIEW", "CRAFT", "STOCK", "STORAGE", "MOVERS", "SYSTEM", "TOOLS"}
+    or {"HOME", "CRAFT", "STOCK", "STORE", "MOVE", "SYS", "MORE"}
   local tabCount = #PAGE_ORDER
   local baseW = math.max(1, math.floor(w / tabCount))
   local extra = w - (baseW * tabCount)
@@ -1630,6 +1651,86 @@ local function renderStorage(screen, data, h)
   end
 end
 
+local function signedFmt(value)
+  value = n(value)
+  local sign = value >= 0 and "+" or "-"
+  return sign .. fmt(math.abs(value))
+end
+
+local function rateFmt(value, suffix)
+  value = n(value)
+  if value == 0 then return "--" .. suffix end
+  local mag = math.abs(value)
+  local text
+  if mag < 1 then
+    text = string.format("%.2f", mag)
+  elseif mag < 10 then
+    text = string.format("%.1f", mag)
+  else
+    text = fmt(mag)
+  end
+  return (value >= 0 and "+" or "-") .. text .. suffix
+end
+
+local function renderMovers(screen, data, h)
+  local w = mon.getSize()
+  local bottom = h - 1
+  local y = 3
+  local rowsAvailable = math.max(1, bottom - (y + 2) + 1)
+  local pageCount = math.max(1, math.ceil(#data.movers / rowsAvailable))
+  listPages[screen] = listPages[screen] or {}
+  local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen].movers or 1)))
+  listPages[screen].movers = pageNumber
+
+  clearLine(y, colors.black)
+  local summary = #data.movers .. " changing item type" .. (#data.movers == 1 and "" or "s")
+  writeAt(2, y, summary .. "  |  sampled every " .. SAMPLE_SECONDS .. "s", colors.lightGray, colors.black, math.max(8, w - 18))
+  pageControls(screen, "movers", y, pageNumber, pageCount)
+  y = y + 1
+
+  local nowW = w >= 72 and 10 or 0
+  local hourW = w >= 58 and 10 or 8
+  local minW = w >= 58 and 10 or 8
+  local deltaW = w >= 58 and 9 or 8
+  local nowX = nowW > 0 and (w - nowW + 1) or nil
+  local hourX = nowW > 0 and (nowX - hourW - 1) or (w - hourW + 1)
+  local minX = hourX - minW - 1
+  local deltaX = minX - deltaW - 1
+  local itemW = math.max(8, deltaX - 3)
+
+  clearLine(y, colors.lightGray)
+  writeAt(2, y, "ITEM", colors.black, colors.lightGray, itemW)
+  writeAt(deltaX, y, "DELTA", colors.black, colors.lightGray, deltaW)
+  writeAt(minX, y, "/MIN", colors.black, colors.lightGray, minW)
+  writeAt(hourX, y, "/HR", colors.black, colors.lightGray, hourW)
+  if nowX then writeAt(nowX, y, "NOW", colors.black, colors.lightGray, nowW) end
+  y = y + 1
+
+  if #data.movers == 0 then
+    centerText(math.min(bottom, y + 3), "No item movement in the current sample window", colors.lightGray, colors.black, w)
+    return
+  end
+
+  local startIndex = ((pageNumber - 1) * rowsAvailable) + 1
+  for i = startIndex, math.min(#data.movers, startIndex + rowsAvailable - 1) do
+    if y > bottom then break end
+    local row = data.movers[i]
+    local bg = (i % 2 == 0) and colors.gray or colors.black
+    local movementColor = n(row.delta) < 0 and colors.orange or colors.lime
+    local deltaText = signedFmt(row.delta)
+    local minText = rateFmt(row.perMinute, "/m")
+    local hourText = rateFmt(row.perHour, "/h")
+    local nowText = fmt(row.amount)
+    clearLine(y, bg)
+    writeAt(2, y, row.name, colors.white, bg, itemW)
+    writeAt(math.max(deltaX, deltaX + deltaW - #deltaText), y, deltaText, movementColor, bg, deltaW)
+    writeAt(math.max(minX, minX + minW - #minText), y, minText, movementColor, bg, minW)
+    writeAt(math.max(hourX, hourX + hourW - #hourText), y, hourText, movementColor, bg, hourW)
+    if nowX then writeAt(math.max(nowX, nowX + nowW - #nowText), y, nowText, colors.lightGray, bg, nowW) end
+    y = y + 1
+  end
+end
+
 local function renderSystem(screen, data, h)
   local w = mon.getSize()
   local bottom = h - 1
@@ -1774,6 +1875,8 @@ local function renderScreen(target, data)
     renderStock(screen, data, h)
   elseif page == "storage" then
     renderStorage(screen, data, h)
+  elseif page == "movers" then
+    renderMovers(screen, data, h)
   elseif page == "system" then
     renderSystem(screen, data, h)
   elseif page == "tools" then
@@ -1823,7 +1926,7 @@ while true do
     if a.ratio ~= b.ratio then return a.ratio < b.ratio end
     return a.name < b.name
   end)
-  local warnings, recent = updateUsage(items)
+  local warnings, recent, movers = updateUsage(items)
 
   local fluidTypes, fluidAmount = 0, 0
   for _, fluid in pairs(fluids) do
@@ -1894,6 +1997,7 @@ while true do
     tasks = tasks,
     warnings = warnings,
     recent = recent,
+    movers = movers,
     lowStock = lowStock,
     top = top,
     itemTypes = itemTypes,
