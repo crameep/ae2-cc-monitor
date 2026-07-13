@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-13.5"
+local VERSION = "2026-07-13.6"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -552,9 +552,58 @@ local function findFluxStored(...)
   return nil, nil, 0
 end
 
-local function detectFluxEnergy(items, fluids, chemicals, cells, bufferStored, bufferCapacity)
+local FLUX_PROBE_FILTERS = {
+  {name = "appflux:fe"},
+  {id = "appflux:fe"},
+  {fingerprint = "appflux:fe"},
+  {resource = "appflux:fe"},
+  {type = "appflux:fe"},
+  {name = "appflux:fe", displayName = "FE"}
+}
+
+local FLUX_PROBE_METHODS = {"getItem", "getChemical", "getFluid", "getAmount"}
+
+local function addFluxProbeResult(rows, method, filter, result)
+  if result == nil then return end
+  if type(result) == "number" and result > 0 then
+    rows[#rows + 1] = {name = "appflux:fe", displayName = "FE", amount = result, _source = method, _filter = filter}
+  elseif type(result) == "table" then
+    local amount = amountOf(result)
+    if amount > 0 then
+      result._source = method
+      result._filter = filter
+      rows[#rows + 1] = result
+    else
+      for _, child in pairs(result) do
+        if type(child) == "table" and amountOf(child) > 0 then
+          child._source = method
+          child._filter = filter
+          rows[#rows + 1] = child
+        end
+      end
+    end
+  end
+end
+
+local function collectFluxProbeRows()
+  local rows = {}
+  for _, method in ipairs(FLUX_PROBE_METHODS) do
+    local f = bridge[method]
+    if type(f) == "function" then
+      for _, filter in ipairs(FLUX_PROBE_FILTERS) do
+        local ok, result = pcall(f, filter)
+        if ok then addFluxProbeResult(rows, method, filter, result) end
+      end
+      local ok, result = pcall(f, "appflux:fe")
+      if ok then addFluxProbeResult(rows, method, "appflux:fe", result) end
+    end
+  end
+  return rows
+end
+
+local function detectFluxEnergy(items, fluids, chemicals, probeRows, cells, bufferStored, bufferCapacity)
   local capacity, cellCount = fluxCellCapacity(cells)
-  local stored, label, score = findFluxStored(items, fluids, chemicals)
+  local stored, label, score = findFluxStored(probeRows, items, fluids, chemicals)
   if stored then
     return {
       stored = stored,
@@ -562,6 +611,7 @@ local function detectFluxEnergy(items, fluids, chemicals, cells, bufferStored, b
       known = true,
       source = label or "Applied Flux FE",
       score = score,
+      probeCount = countTable(probeRows),
       cellCount = cellCount,
       bufferStored = n(bufferStored),
       bufferCapacity = n(bufferCapacity)
@@ -573,6 +623,7 @@ local function detectFluxEnergy(items, fluids, chemicals, cells, bufferStored, b
     known = false,
     source = cellCount > 0 and "FE cells found; stored amount not exposed" or "FE cells not visible",
     score = 0,
+    probeCount = countTable(probeRows),
     cellCount = cellCount,
     bufferStored = n(bufferStored),
     bufferCapacity = n(bufferCapacity)
@@ -1891,7 +1942,7 @@ local function renderSystem(screen, data, h)
     y = y + 1
     if y <= bottom then
       writeAt(2, y, "Source", colors.lightGray, colors.black, 12)
-      writeAt(15, y, data.feSource .. "  |  " .. data.feCellCount .. " FE cell(s)", data.feKnown and colors.lightGray or colors.orange, colors.black, w - 15)
+      writeAt(15, y, data.feSource .. "  |  " .. data.feCellCount .. " cell(s), " .. data.feProbeCount .. " probe(s)", data.feKnown and colors.lightGray or colors.orange, colors.black, w - 15)
       y = y + 1
     end
     local etaText = powerEtaText(data.powerStats)
@@ -2082,6 +2133,7 @@ while true do
   local items = callAnyArg({"listItems", "getItems"}, {}, {}) or {}
   local fluids = callAnyArg({"listFluid", "listFluids", "getFluids"}, {}, {}) or {}
   local chemicals = callAnyArg({"listChemicals", "getChemicals"}, {}, {}) or {}
+  local fluxProbeRows = collectFluxProbeRows()
   local cells = callAny({"listCells", "getCells"}, {}) or {}
   local drives = call("getDrives", {}) or {}
   local rawCpus = callAny({"getCraftingCPUs", "listCraftingCPUs"}, {}) or {}
@@ -2133,7 +2185,7 @@ while true do
   local energyCap = callAny({"getMaxEnergyStorage", "getEnergyCapacity"}, 0)
   local usage = call("getEnergyUsage", 0)
   local input = callAny({"getAverageEnergyInput", "getAvgPowerInjection"}, 0)
-  local fluxInfo = detectFluxEnergy(items, fluids, chemicals, cells, energy, energyCap)
+  local fluxInfo = detectFluxEnergy(items, fluids, chemicals, fluxProbeRows, cells, energy, energyCap)
   local currentPowerStats = updatePowerStats(fluxInfo)
   local itemTypeTotal, fluidTypeTotal, itemCellCount, fluidCellCount = typeSlots(cells)
   local itemPct = pct(itemUsed, itemTotal)
@@ -2182,6 +2234,7 @@ while true do
     items = items,
     fluids = fluids,
     chemicals = chemicals,
+    fluxProbeRows = fluxProbeRows,
     cells = cells,
     drives = drives,
     cellCount = countTable(cells),
@@ -2211,6 +2264,7 @@ while true do
     fePct = fePct,
     feSource = fluxInfo.source,
     feCellCount = fluxInfo.cellCount or 0,
+    feProbeCount = fluxInfo.probeCount or 0,
     usage = usage,
     input = input,
     powerStats = currentPowerStats,

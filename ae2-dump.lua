@@ -416,6 +416,39 @@ local function runDump()
         end
       end
 
+      if not outputStopped then
+        line("")
+        line("APPLIED FLUX TARGETED PROBES")
+        local fluxFilters = {
+          {name = "appflux:fe"},
+          {id = "appflux:fe"},
+          {fingerprint = "appflux:fe"},
+          {resource = "appflux:fe"},
+          {type = "appflux:fe"},
+          {name = "appflux:fe", displayName = "FE"},
+          "appflux:fe"
+        }
+        local fluxMethods = {getItem = true, getChemical = true, getFluid = true, getAmount = true}
+        for _, method in ipairs(bridge.methods) do
+          if outputStopped then break end
+          if fluxMethods[method] then
+            for _, filter in ipairs(fluxFilters) do
+              line("")
+              line("METHOD " .. method .. "(" .. serialize(filter) .. ")")
+              local ok, returned = callPeripheral(bridge.name, method, filter)
+              if not ok then
+                line("ERROR: " .. safeToString(returned))
+              else
+                local raw = {n = returned.n}
+                for i = 1, returned.n do raw[i] = returned[i] end
+                line(serialize(sanitize(raw)))
+              end
+              checkpoint(true)
+            end
+          end
+        end
+      end
+
       local taskMethods = {}
       for _, method in ipairs(bridge.methods) do
         if method == "getCraftingTask" or method == "getCraftingJob" then
