@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-13.6"
+local VERSION = "2026-07-13.7"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -499,7 +499,7 @@ local function cellHealth(cells)
 end
 
 local function fluxCellCapacity(cells)
-  local capacity, cellCount = 0, 0
+  local capacity, cellCount, usedEstimate, usedCellCount = 0, 0, 0, 0
   for _, cell in pairs(cells or {}) do
     local text = norm(gatherText(cell))
     if string.find(text, "appflux:fe_", 1, true)
@@ -510,9 +510,14 @@ local function fluxCellCapacity(cells)
         capacity = capacity + (bytes * FLUX_FE_PER_BYTE)
         cellCount = cellCount + 1
       end
+      local usedBytes = n(cell.usedBytes or cell.bytesUsed or cell.used)
+      if usedBytes > 0 then
+        usedEstimate = usedEstimate + (usedBytes * FLUX_FE_PER_BYTE)
+        usedCellCount = usedCellCount + 1
+      end
     end
   end
-  return capacity, cellCount
+  return capacity, cellCount, usedEstimate, usedCellCount
 end
 
 local function fluxKeyScore(row)
@@ -602,13 +607,14 @@ local function collectFluxProbeRows()
 end
 
 local function detectFluxEnergy(items, fluids, chemicals, probeRows, cells, bufferStored, bufferCapacity)
-  local capacity, cellCount = fluxCellCapacity(cells)
+  local capacity, cellCount, usedEstimate, usedCellCount = fluxCellCapacity(cells)
   local stored, label, score = findFluxStored(probeRows, items, fluids, chemicals)
   if stored then
     return {
       stored = stored,
       capacity = capacity,
       known = true,
+      estimated = false,
       source = label or "Applied Flux FE",
       score = score,
       probeCount = countTable(probeRows),
@@ -617,14 +623,31 @@ local function detectFluxEnergy(items, fluids, chemicals, probeRows, cells, buff
       bufferCapacity = n(bufferCapacity)
     }
   end
+  if usedEstimate > 0 then
+    return {
+      stored = usedEstimate,
+      capacity = capacity,
+      known = true,
+      estimated = true,
+      source = "FE cell byte estimate",
+      score = 1,
+      probeCount = countTable(probeRows),
+      cellCount = cellCount,
+      usedCellCount = usedCellCount,
+      bufferStored = n(bufferStored),
+      bufferCapacity = n(bufferCapacity)
+    }
+  end
   return {
     stored = nil,
     capacity = capacity,
     known = false,
+    estimated = false,
     source = cellCount > 0 and "FE cells found; stored amount not exposed" or "FE cells not visible",
     score = 0,
     probeCount = countTable(probeRows),
     cellCount = cellCount,
+    usedCellCount = usedCellCount,
     bufferStored = n(bufferStored),
     bufferCapacity = n(bufferCapacity)
   }
@@ -1536,10 +1559,11 @@ local function renderOverview(screen, data, h)
   capacityRow(y, "Types", data.itemTypes, data.itemTypeTotal, colors.yellow); y = y + 1
   capacityRow(y, "Fluids", data.fluidUsed, data.fluidTotal, colors.blue); y = y + 1
   if data.feKnown and data.feCapacity > 0 then
-    capacityRow(y, "FE Cells", data.feStored, data.feCapacity, colors.orange)
+    capacityRow(y, data.feEstimated and "~FE Cells" or "FE Cells", data.feStored, data.feCapacity, colors.orange)
   elseif data.feKnown then
     writeAt(2, y, "FE Cells", colors.lightGray, colors.black, 12)
-    writeAt(15, y, fmt(data.feStored) .. " FE stored", colors.white, colors.black, w - 15)
+    local estimateMark = data.feEstimated and "~" or ""
+    writeAt(15, y, estimateMark .. fmt(data.feStored) .. " FE stored", colors.white, colors.black, w - 15)
   else
     writeAt(2, y, "FE Cells", colors.lightGray, colors.black, 12)
     local capText = data.feCapacity > 0 and ("cap " .. fmt(data.feCapacity) .. " FE") or data.feSource
@@ -1928,9 +1952,11 @@ local function renderSystem(screen, data, h)
     y = y + 1
     writeAt(2, y, "Stored", colors.lightGray, colors.black, 12)
     if data.feKnown and data.feCapacity > 0 then
-      writeAt(15, y, fmt(data.feStored) .. " / " .. fmt(data.feCapacity) .. " FE  (" .. math.floor(data.fePct + 0.5) .. "%)", colors.white, colors.black, w - 15)
+      local estimateMark = data.feEstimated and "~" or ""
+      writeAt(15, y, estimateMark .. fmt(data.feStored) .. " / " .. fmt(data.feCapacity) .. " FE  (" .. math.floor(data.fePct + 0.5) .. "%)", colors.white, colors.black, w - 15)
     elseif data.feKnown then
-      writeAt(15, y, fmt(data.feStored) .. " FE stored  |  capacity unknown", colors.white, colors.black, w - 15)
+      local estimateMark = data.feEstimated and "~" or ""
+      writeAt(15, y, estimateMark .. fmt(data.feStored) .. " FE stored  |  capacity unknown", colors.white, colors.black, w - 15)
     else
       local capText = data.feCapacity > 0 and ("capacity " .. fmt(data.feCapacity) .. " FE") or "no FE cells detected"
       writeAt(15, y, "Stored amount not exposed  |  " .. capText, colors.orange, colors.black, w - 15)
@@ -1942,7 +1968,8 @@ local function renderSystem(screen, data, h)
     y = y + 1
     if y <= bottom then
       writeAt(2, y, "Source", colors.lightGray, colors.black, 12)
-      writeAt(15, y, data.feSource .. "  |  " .. data.feCellCount .. " cell(s), " .. data.feProbeCount .. " probe(s)", data.feKnown and colors.lightGray or colors.orange, colors.black, w - 15)
+      local estimateText = data.feEstimated and "approx  |  " or ""
+      writeAt(15, y, estimateText .. data.feSource .. "  |  " .. data.feCellCount .. " cell(s), " .. data.feProbeCount .. " probe(s)", data.feKnown and colors.lightGray or colors.orange, colors.black, w - 15)
       y = y + 1
     end
     local etaText = powerEtaText(data.powerStats)
@@ -2259,6 +2286,7 @@ while true do
     energy = energy,
     energyCap = energyCap,
     feKnown = fluxInfo.known,
+    feEstimated = fluxInfo.estimated == true,
     feStored = fluxInfo.stored or 0,
     feCapacity = fluxInfo.capacity or 0,
     fePct = fePct,

@@ -26,6 +26,8 @@ The bottom row is a persistent touch navigation bar:
 
 Each attached monitor remembers its own selected page while the script is running.
 
+Applied Flux FE is read from the FE key when Advanced Peripherals exposes it. If not, the monitor estimates stored FE from FE-cell used bytes at the configured default of 1,048,576 FE per byte and marks the value with `~`.
+
 ## Crafting Detection
 
 The monitor checks both:
