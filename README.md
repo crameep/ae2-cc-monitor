@@ -16,12 +16,12 @@ reboot
 
 The bottom row is a persistent touch navigation bar:
 
-- **Overview** — health, storage, FE stored/trend, active crafting, and the most important alert.
+- **Overview** — health, storage, Applied Flux FE cell stored/trend when exposed, active crafting, and the most important alert.
 - **Crafting** — active AE2 crafting jobs, progress, crafted quantity, sampled rate, ETA, CPU, bytes, and subpart information when Advanced Peripherals exposes it.
 - **Stock** — confirmed material drops, recent use, ATM10 bottleneck warnings, and `IGN` controls.
 - **Storage** — paged largest-item list and manual/automatic bulk-cell markers.
 - **Movers** — recent item deltas sorted by movement rate, with per-minute and per-hour estimates.
-- **System** — grid status, cells, drives, FE storage/trend, bridge power flow, crafting CPUs, version, and updater.
+- **System** — grid status, cells, drives, Applied Flux FE cell storage/trend, AE buffer/bridge power flow, crafting CPUs, version, and updater.
 - **Tools** — one-touch AE2 diagnostic generation and optional Pastebin upload, with the latest link shown on the monitor.
 
 Each attached monitor remembers its own selected page while the script is running.

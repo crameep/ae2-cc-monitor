@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-13.4"
+local VERSION = "2026-07-13.5"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -46,6 +46,7 @@ local DROP_EVENTS_REQUIRED = 2
 local LOW_STOCK = 4096
 local FAST_DROP = 1024
 local PATTERN_REFRESH_SECONDS = 30
+local FLUX_FE_PER_BYTE = 1048576
 
 local function call(name, default)
   local f = bridge[name]
@@ -495,6 +496,87 @@ local function cellHealth(cells)
     end
   end
   return nearFull, empty
+end
+
+local function fluxCellCapacity(cells)
+  local capacity, cellCount = 0, 0
+  for _, cell in pairs(cells or {}) do
+    local text = norm(gatherText(cell))
+    if string.find(text, "appflux:fe_", 1, true)
+      or string.find(text, "me fe storage cell", 1, true)
+      or string.find(text, "fe storage cell", 1, true) then
+      local bytes = n(cell.totalBytes or cell.bytes or cell.capacity or cell.total)
+      if bytes > 0 then
+        capacity = capacity + (bytes * FLUX_FE_PER_BYTE)
+        cellCount = cellCount + 1
+      end
+    end
+  end
+  return capacity, cellCount
+end
+
+local function fluxKeyScore(row)
+  local key = string.lower(itemKey(row))
+  local name = string.lower(tostring(row.name or row.id or row.resource or ""))
+  local display = norm(tostring(row.displayName or row.label or ""))
+  local text = norm(gatherText(row))
+  local score = 0
+
+  if key == "appflux:fe" or name == "appflux:fe" then score = score + 100 end
+  if display == "fe" or display == "energy" then score = score + 40 end
+  if string.find(text, "fluxkey", 1, true) and string.find(text, "fe", 1, true) then score = score + 80 end
+  if string.find(text, "appflux.type.fe", 1, true) or string.find(text, "appflux:fe", 1, true) then score = score + 60 end
+  if string.find(text, "appflux.key.flux", 1, true) or string.find(text, "energytype", 1, true) then score = score + 20 end
+
+  if string.find(text, "storage cell", 1, true) or string.find(text, "portable cell", 1, true) then score = score - 100 end
+  if string.find(text, "processor", 1, true) or string.find(text, "crystal", 1, true) or string.find(text, "dust", 1, true) then score = score - 80 end
+  return score
+end
+
+local function findFluxStored(...)
+  local best, bestScore = nil, 0
+  for i = 1, select("#", ...) do
+    local rows = select(i, ...)
+    for _, row in pairs(rows or {}) do
+      local amount = amountOf(row)
+      if amount > 0 then
+        local score = fluxKeyScore(row)
+        if score > bestScore then
+          best = row
+          bestScore = score
+        end
+      end
+    end
+  end
+  if best then return amountOf(best), itemLabel(best), bestScore end
+  return nil, nil, 0
+end
+
+local function detectFluxEnergy(items, fluids, chemicals, cells, bufferStored, bufferCapacity)
+  local capacity, cellCount = fluxCellCapacity(cells)
+  local stored, label, score = findFluxStored(items, fluids, chemicals)
+  if stored then
+    return {
+      stored = stored,
+      capacity = capacity,
+      known = true,
+      source = label or "Applied Flux FE",
+      score = score,
+      cellCount = cellCount,
+      bufferStored = n(bufferStored),
+      bufferCapacity = n(bufferCapacity)
+    }
+  end
+  return {
+    stored = nil,
+    capacity = capacity,
+    known = false,
+    source = cellCount > 0 and "FE cells found; stored amount not exposed" or "FE cells not visible",
+    score = 0,
+    cellCount = cellCount,
+    bufferStored = n(bufferStored),
+    bufferCapacity = n(bufferCapacity)
+  }
 end
 
 local function loadState()
@@ -1310,6 +1392,7 @@ local function rateFmt(value, suffix)
 end
 
 local function powerTrendText(stats)
+  if stats and not stats.known then return "stored FE hidden" end
   if not stats or not stats.trendReady then return "trend learning" end
   return rateFmt(stats.netPerTick, " FE/t") .. "  " .. rateFmt(stats.netPerMinute, " FE/m")
 end
@@ -1391,21 +1474,33 @@ local function renderOverview(screen, data, h)
   if bottom - y >= 8 and w >= 42 then
     local gap = 1
     local tileW = math.floor((w - (gap * 2)) / 3)
+    local feValue = data.feKnown and (data.feCapacity > 0 and (math.floor(data.fePct + 0.5) .. "%") or fmt(data.feStored)) or "HIDDEN"
     tile(1, y, tileW, "ITEM STORAGE", math.floor(data.itemPct + 0.5) .. "%", fmt(data.itemUsed) .. " / " .. (data.itemTotal > 0 and fmt(data.itemTotal) or "?"), colors.green)
     tile(tileW + gap + 1, y, tileW, "TYPE SLOTS", math.floor(data.typePct + 0.5) .. "%", data.itemTypes .. " / " .. (data.itemTypeTotal > 0 and data.itemTypeTotal or "?"), colors.yellow)
-    tile((tileW * 2) + (gap * 2) + 1, y, w - ((tileW * 2) + (gap * 2)), "FE STORED", math.floor(data.powerPct + 0.5) .. "%", powerTrendText(data.powerStats), colors.orange)
+    tile((tileW * 2) + (gap * 2) + 1, y, w - ((tileW * 2) + (gap * 2)), "APPFLUX FE", feValue, powerTrendText(data.powerStats), colors.orange)
     y = y + 4
   end
 
   capacityRow(y, "Items", data.itemUsed, data.itemTotal, colors.lime); y = y + 1
   capacityRow(y, "Types", data.itemTypes, data.itemTypeTotal, colors.yellow); y = y + 1
   capacityRow(y, "Fluids", data.fluidUsed, data.fluidTotal, colors.blue); y = y + 1
-  capacityRow(y, "FE Store", data.energy, data.energyCap, colors.orange); y = y + 1
+  if data.feKnown and data.feCapacity > 0 then
+    capacityRow(y, "FE Cells", data.feStored, data.feCapacity, colors.orange)
+  elseif data.feKnown then
+    writeAt(2, y, "FE Cells", colors.lightGray, colors.black, 12)
+    writeAt(15, y, fmt(data.feStored) .. " FE stored", colors.white, colors.black, w - 15)
+  else
+    writeAt(2, y, "FE Cells", colors.lightGray, colors.black, 12)
+    local capText = data.feCapacity > 0 and ("cap " .. fmt(data.feCapacity) .. " FE") or data.feSource
+    writeAt(15, y, "stored hidden  |  " .. capText, colors.orange, colors.black, w - 15)
+  end
+  y = y + 1
   if y <= bottom then
     local etaText = powerEtaText(data.powerStats)
     local rightText = etaText or (fmt(data.usage) .. "/t bridge use")
+    local trendColor = (data.powerStats and not data.powerStats.known) and colors.orange or (data.powerStats and data.powerStats.netPerSecond < 0 and colors.orange or colors.lime)
     writeAt(2, y, "FE Trend", colors.lightGray, colors.black, 12)
-    writeAt(15, y, powerTrendText(data.powerStats), data.powerStats and data.powerStats.netPerSecond < 0 and colors.orange or colors.lime, colors.black, math.max(8, w - #rightText - 18))
+    writeAt(15, y, powerTrendText(data.powerStats), trendColor, colors.black, math.max(8, w - #rightText - 18))
     writeAt(math.max(1, w - #rightText + 1), y, rightText, etaText and colors.yellow or colors.lightGray, colors.black, #rightText)
     y = y + 2
   else
@@ -1778,18 +1873,36 @@ local function renderSystem(screen, data, h)
 
   if y <= bottom then
     clearLine(y, colors.lightGray)
-    writeAt(2, y, "FE POWER", colors.black, colors.lightGray, w - 2)
+    writeAt(2, y, "APPFLUX FE CELLS", colors.black, colors.lightGray, w - 2)
     y = y + 1
     writeAt(2, y, "Stored", colors.lightGray, colors.black, 12)
-    writeAt(15, y, fmt(data.energy) .. " / " .. (data.energyCap > 0 and fmt(data.energyCap) or "?") .. " FE  (" .. math.floor(data.powerPct + 0.5) .. "%)", colors.white, colors.black, w - 15)
+    if data.feKnown and data.feCapacity > 0 then
+      writeAt(15, y, fmt(data.feStored) .. " / " .. fmt(data.feCapacity) .. " FE  (" .. math.floor(data.fePct + 0.5) .. "%)", colors.white, colors.black, w - 15)
+    elseif data.feKnown then
+      writeAt(15, y, fmt(data.feStored) .. " FE stored  |  capacity unknown", colors.white, colors.black, w - 15)
+    else
+      local capText = data.feCapacity > 0 and ("capacity " .. fmt(data.feCapacity) .. " FE") or "no FE cells detected"
+      writeAt(15, y, "Stored amount not exposed  |  " .. capText, colors.orange, colors.black, w - 15)
+    end
     y = y + 1
     writeAt(2, y, "Trend", colors.lightGray, colors.black, 12)
-    writeAt(15, y, powerTrendText(data.powerStats), data.powerStats and data.powerStats.netPerSecond < 0 and colors.orange or colors.lime, colors.black, w - 15)
+    local trendColor = (data.powerStats and not data.powerStats.known) and colors.orange or (data.powerStats and data.powerStats.netPerSecond < 0 and colors.orange or colors.lime)
+    writeAt(15, y, powerTrendText(data.powerStats), trendColor, colors.black, w - 15)
     y = y + 1
+    if y <= bottom then
+      writeAt(2, y, "Source", colors.lightGray, colors.black, 12)
+      writeAt(15, y, data.feSource .. "  |  " .. data.feCellCount .. " FE cell(s)", data.feKnown and colors.lightGray or colors.orange, colors.black, w - 15)
+      y = y + 1
+    end
     local etaText = powerEtaText(data.powerStats)
     if etaText and y <= bottom then
       writeAt(2, y, "Estimate", colors.lightGray, colors.black, 12)
       writeAt(15, y, etaText, colors.yellow, colors.black, w - 15)
+      y = y + 1
+    end
+    if y <= bottom then
+      writeAt(2, y, "AE Buffer", colors.lightGray, colors.black, 12)
+      writeAt(15, y, fmt(data.energy) .. " / " .. (data.energyCap > 0 and fmt(data.energyCap) or "?") .. " AE", colors.lightGray, colors.black, w - 15)
       y = y + 1
     end
     if y <= bottom then
@@ -1917,14 +2030,28 @@ local function renderScreen(target, data)
   drawNav(screen, page, h)
 end
 
-local function updatePowerStats(energy, energyCap)
+local function updatePowerStats(fluxInfo)
   local now = nowSeconds()
-  local stored = n(energy)
-  local cap = n(energyCap)
+  local stored = fluxInfo and fluxInfo.stored or nil
+  local cap = fluxInfo and n(fluxInfo.capacity) or 0
+  powerStats.known = fluxInfo and fluxInfo.known == true
+  powerStats.source = fluxInfo and fluxInfo.source or "unknown"
+
+  if not powerStats.known or stored == nil then
+    powerStats.trendReady = false
+    powerStats.netPerSecond = 0
+    powerStats.netPerTick = 0
+    powerStats.netPerMinute = 0
+    powerStats.eta = 0
+    powerStats.etaMode = nil
+    powerStats.lastEnergy = nil
+    powerStats.lastTime = now
+    return powerStats
+  end
 
   if powerStats.lastEnergy ~= nil and powerStats.lastTime ~= nil and now > powerStats.lastTime then
     local elapsed = now - powerStats.lastTime
-    local instantPerSecond = (stored - n(powerStats.lastEnergy)) / elapsed
+    local instantPerSecond = (n(stored) - n(powerStats.lastEnergy)) / elapsed
     if powerStats.trendReady then
       powerStats.netPerSecond = (n(powerStats.netPerSecond) * 0.70) + (instantPerSecond * 0.30)
     else
@@ -1934,11 +2061,11 @@ local function updatePowerStats(energy, energyCap)
     powerStats.netPerTick = powerStats.netPerSecond / 20
     powerStats.netPerMinute = powerStats.netPerSecond * 60
 
-    if powerStats.netPerSecond > 0 and cap > stored then
-      powerStats.eta = (cap - stored) / powerStats.netPerSecond
+    if powerStats.netPerSecond > 0 and cap > n(stored) then
+      powerStats.eta = (cap - n(stored)) / powerStats.netPerSecond
       powerStats.etaMode = "full"
-    elseif powerStats.netPerSecond < 0 and stored > 0 then
-      powerStats.eta = stored / math.abs(powerStats.netPerSecond)
+    elseif powerStats.netPerSecond < 0 and n(stored) > 0 then
+      powerStats.eta = n(stored) / math.abs(powerStats.netPerSecond)
       powerStats.etaMode = "empty"
     else
       powerStats.eta = 0
@@ -1946,7 +2073,7 @@ local function updatePowerStats(energy, energyCap)
     end
   end
 
-  powerStats.lastEnergy = stored
+  powerStats.lastEnergy = n(stored)
   powerStats.lastTime = now
   return powerStats
 end
@@ -1954,6 +2081,7 @@ end
 while true do
   local items = callAnyArg({"listItems", "getItems"}, {}, {}) or {}
   local fluids = callAnyArg({"listFluid", "listFluids", "getFluids"}, {}, {}) or {}
+  local chemicals = callAnyArg({"listChemicals", "getChemicals"}, {}, {}) or {}
   local cells = callAny({"listCells", "getCells"}, {}) or {}
   local drives = call("getDrives", {}) or {}
   local rawCpus = callAny({"getCraftingCPUs", "listCraftingCPUs"}, {}) or {}
@@ -2005,13 +2133,15 @@ while true do
   local energyCap = callAny({"getMaxEnergyStorage", "getEnergyCapacity"}, 0)
   local usage = call("getEnergyUsage", 0)
   local input = callAny({"getAverageEnergyInput", "getAvgPowerInjection"}, 0)
-  local currentPowerStats = updatePowerStats(energy, energyCap)
+  local fluxInfo = detectFluxEnergy(items, fluids, chemicals, cells, energy, energyCap)
+  local currentPowerStats = updatePowerStats(fluxInfo)
   local itemTypeTotal, fluidTypeTotal, itemCellCount, fluidCellCount = typeSlots(cells)
   local itemPct = pct(itemUsed, itemTotal)
   local typePct = pct(itemTypes, itemTypeTotal)
   local fluidPct = pct(fluidUsed, fluidTotal)
   local fluidTypePct = pct(fluidTypes, fluidTypeTotal)
   local powerPct = pct(energy, energyCap)
+  local fePct = fluxInfo.known and pct(fluxInfo.stored, fluxInfo.capacity) or 0
   local powerNet = input - usage
   local powerBufferSeconds = powerNet < 0 and energy / math.max(1, (-powerNet) * 20) or 0
   local nearFullCellCount, emptyCellCount = cellHealth(cells)
@@ -2030,8 +2160,8 @@ while true do
     health, healthColor, healthDetail = "ITEM STORAGE FULL", colors.red, "add item storage"
   elseif typePct >= 85 then
     health, healthColor, healthDetail = "TYPE SLOTS FULL", colors.red, "add type capacity"
-  elseif powerPct > 0 and powerPct < 20 then
-    health, healthColor, healthDetail = "LOW FE", colors.red, "stored FE " .. math.floor(powerPct + 0.5) .. "%"
+  elseif fluxInfo.known and fluxInfo.capacity > 0 and fePct < 20 then
+    health, healthColor, healthDetail = "LOW FE", colors.red, "FE cells " .. math.floor(fePct + 0.5) .. "%"
   elseif currentPowerStats.trendReady and currentPowerStats.etaMode == "empty" and currentPowerStats.eta > 0 and currentPowerStats.eta < 1800 then
     health, healthColor, healthDetail = "FE DRAIN", colors.orange, "empty in " .. duration(currentPowerStats.eta)
   elseif fluidPct >= 90 then
@@ -2051,6 +2181,7 @@ while true do
   local data = {
     items = items,
     fluids = fluids,
+    chemicals = chemicals,
     cells = cells,
     drives = drives,
     cellCount = countTable(cells),
@@ -2074,6 +2205,12 @@ while true do
     fluidTotal = fluidTotal,
     energy = energy,
     energyCap = energyCap,
+    feKnown = fluxInfo.known,
+    feStored = fluxInfo.stored or 0,
+    feCapacity = fluxInfo.capacity or 0,
+    fePct = fePct,
+    feSource = fluxInfo.source,
+    feCellCount = fluxInfo.cellCount or 0,
     usage = usage,
     input = input,
     powerStats = currentPowerStats,
