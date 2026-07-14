@@ -523,7 +523,14 @@ local function runDump()
     local noArgTargets = {
       "listItems", "getItems", "listFluids", "getFluids", "listChemicals", "getChemicals",
       "listCells", "getCells", "listCraftingCPUs", "getCraftingCPUs", "getEnergyStorage",
-      "getMaxEnergyStorage", "getEnergyUsage", "getAvgPowerInjection", "getAvgPowerUsage"
+      "getMaxEnergyStorage", "getStoredEnergy", "getEnergyCapacity", "getEnergyUsage",
+      "getAverageEnergyInput", "getAvgPowerInjection", "getAvgPowerUsage",
+      "getUsedItemStorage", "getTotalItemStorage", "getAvailableItemStorage",
+      "getUsedFluidStorage", "getTotalFluidStorage", "getAvailableFluidStorage",
+      "getUsedChemicalStorage", "getTotalChemicalStorage", "getAvailableChemicalStorage",
+      "getUsedExternalItemStorage", "getTotalExternalItemStorage", "getAvailableExternalItemStorage",
+      "getUsedExternalFluidStorage", "getTotalExternalFluidStorage", "getAvailableExternalFluidStorage",
+      "getUsedExternalChemicalStorage", "getTotalExternalChemicalStorage", "getAvailableExternalChemicalStorage"
     }
     for _, method in ipairs(noArgTargets) do
       addTargetedProbe(bridgeDump.targetedProbes, bridge.name, bridge.methods, method, {}, "targeted no-arg AE2/FE/fluid inventory probe")
