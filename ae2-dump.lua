@@ -1,16 +1,16 @@
--- AE2 / Advanced Peripherals one-shot diagnostic dumper
+-- AE2 / Advanced Peripherals one-shot exploratory JSON dumper
 -- Produces a bounded, paste-ready snapshot without filling the computer disk.
 
 local args = {...}
-local OUTPUT_FILE = args[1] and args[1] ~= "upload" and args[1] or "ae2-dump.txt"
+local OUTPUT_FILE = args[1] and args[1] ~= "upload" and args[1] or "ae2-dump.json"
 local SHOULD_UPLOAD = args[1] == "upload" or args[2] == "upload"
 
-local MAX_DEPTH = 7
-local MAX_FULL_TABLE_ENTRIES = 120
-local SAMPLE_ENTRIES = 16
-local TOP_AMOUNT_ENTRIES = 20
+local MAX_DEPTH = 8
+local MAX_FULL_TABLE_ENTRIES = 180
+local SAMPLE_ENTRIES = 24
+local TOP_AMOUNT_ENTRIES = 30
 local MAX_STRING_LENGTH = 4000
-local MAX_OUTPUT_BYTES = 400000
+local MAX_OUTPUT_BYTES = 900000
 local RESERVED_DISK_BYTES = 65536
 local CHECKPOINT_EVERY = 150
 
@@ -289,11 +289,73 @@ sanitize = function(value, depth, seen)
   return output
 end
 
-local function serialize(value)
-  local ok, result = pcall(textutils.serialize, value, {compact = false, allow_repetitions = true})
-  if ok then return result end
-  ok, result = pcall(textutils.serialize, value)
-  return ok and result or ("<serialize failed: " .. safeToString(result) .. ">")
+local function jsonEscape(text)
+  text = tostring(text or "")
+  text = string.gsub(text, "\\", "\\\\")
+  text = string.gsub(text, "\"", "\\\"")
+  text = string.gsub(text, "\b", "\\b")
+  text = string.gsub(text, "\f", "\\f")
+  text = string.gsub(text, "\n", "\\n")
+  text = string.gsub(text, "\r", "\\r")
+  text = string.gsub(text, "\t", "\\t")
+  text = string.gsub(text, "[%z\1-\31]", function(c)
+    return string.format("\\u%04x", string.byte(c))
+  end)
+  return text
+end
+
+local function isArray(value)
+  if type(value) ~= "table" then return false, 0 end
+  local count, maxIndex = 0, 0
+  for key in pairs(value) do
+    if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then return false, 0 end
+    count = count + 1
+    if key > maxIndex then maxIndex = key end
+  end
+  return count == maxIndex, maxIndex
+end
+
+local jsonEncode
+
+jsonEncode = function(value, indent)
+  indent = indent or 0
+  local valueType = type(value)
+  if valueType == "nil" then return "null" end
+  if valueType == "boolean" then return value and "true" or "false" end
+  if valueType == "number" then
+    if value ~= value or value == math.huge or value == -math.huge then return "null" end
+    return tostring(value)
+  end
+  if valueType == "string" then return "\"" .. jsonEscape(value) .. "\"" end
+  if valueType ~= "table" then return "\"" .. jsonEscape("<" .. valueType .. ": " .. safeToString(value) .. ">") .. "\"" end
+
+  local pad = string.rep("  ", indent)
+  local childPad = string.rep("  ", indent + 1)
+  local array, maxIndex = isArray(value)
+  local parts = {}
+
+  if array then
+    for i = 1, maxIndex do
+      parts[#parts + 1] = childPad .. jsonEncode(value[i], indent + 1)
+    end
+    if #parts == 0 then return "[]" end
+    return "[\n" .. table.concat(parts, ",\n") .. "\n" .. pad .. "]"
+  end
+
+  for _, key in ipairs(sortedKeys(value)) do
+    parts[#parts + 1] = childPad .. "\"" .. jsonEscape(safeToString(key)) .. "\": " .. jsonEncode(value[key], indent + 1)
+  end
+  if #parts == 0 then return "{}" end
+  return "{\n" .. table.concat(parts, ",\n") .. "\n" .. pad .. "}"
+end
+
+local function serializeJson(value)
+  local fn = textutils and (textutils.serializeJSON or textutils.serialiseJSON)
+  if type(fn) == "function" then
+    local ok, result = pcall(fn, value)
+    if ok and type(result) == "string" then return result end
+  end
+  return jsonEncode(value, 0)
 end
 
 local function callPeripheral(name, method, ...)
@@ -346,151 +408,194 @@ local function collectTaskIds(value, ids, depth, seen)
   return ids
 end
 
+local function returnedValues(returned)
+  local values = {count = returned.n, values = {}}
+  for i = 1, returned.n do values.values[i] = sanitize(returned[i]) end
+  return values
+end
+
+local function collectReturnedTaskIds(returned, taskIds)
+  for i = 1, returned.n do collectTaskIds(returned[i], taskIds) end
+end
+
+local function callAndCapture(name, method, args)
+  args = args or {}
+  local unpackArgs = table.unpack or unpack
+  local result = pack(pcall(peripheral.call, name, method, unpackArgs(args)))
+  if not result[1] then
+    return {ok = false, error = safeToString(result[2])}
+  end
+  local returned = {n = result.n - 1}
+  for i = 2, result.n do returned[i - 1] = result[i] end
+  return {ok = true, returned = returnedValues(returned), rawReturned = returned}
+end
+
+local function captureProbe(name, method, args)
+  local captured = callAndCapture(name, method, args)
+  local rawReturned = captured.rawReturned
+  captured.rawReturned = nil
+  return captured, rawReturned
+end
+
+local function methodExists(methods, wanted)
+  for _, method in ipairs(methods or {}) do
+    if method == wanted then return true end
+  end
+  return false
+end
+
+local function addTargetedProbe(probes, bridgeName, methods, method, args, note)
+  if not methodExists(methods, method) then return end
+  local captured = captureProbe(bridgeName, method, args)
+  probes[#probes + 1] = {
+    method = method,
+    args = sanitize(args or {}),
+    note = note,
+    result = captured
+  }
+  checkpoint(true)
+end
+
 local function runDump()
   local startClock = os.clock()
-  line("AE2 / ADVANCED PERIPHERALS DIAGNOSTIC DUMP")
-  line("Generated once; read-only methods only")
-  line("Output mode: bounded compact dump")
-  line("Safe output budget: " .. tostring(outputBudget) .. " bytes")
-  line("Computer ID: " .. safeToString(os.getComputerID and os.getComputerID() or "unknown"))
-  line("Computer label: " .. safeToString(os.getComputerLabel and os.getComputerLabel() or "none"))
-  line("CraftOS: " .. safeToString(os.version and os.version() or "unknown"))
-  line("Epoch UTC: " .. safeToString(os.epoch and os.epoch("utc") or "unavailable"))
+  local dump = {
+    schema = "ae2-cc-monitor.exploratory-dump.v1",
+    meta = {
+      generatedBy = "ae2-dump.lua",
+      purpose = "Explore Advanced Peripherals ME Bridge accessible data for items, fluids, chemicals, FE, cells, CPUs, and method shapes.",
+      readOnlyMethodsOnly = true,
+      outputFile = OUTPUT_FILE,
+      outputBudgetBytes = outputBudget,
+      maxDepth = MAX_DEPTH,
+      maxFullTableEntries = MAX_FULL_TABLE_ENTRIES,
+      sampleEntries = SAMPLE_ENTRIES,
+      topAmountEntries = TOP_AMOUNT_ENTRIES,
+      computerId = os.getComputerID and os.getComputerID() or nil,
+      computerLabel = os.getComputerLabel and os.getComputerLabel() or nil,
+      craftOs = os.version and os.version() or nil,
+      epochUtc = os.epoch and os.epoch("utc") or nil
+    },
+    peripherals = {},
+    bridges = {},
+    summary = {}
+  }
 
   local names = peripheral.getNames()
   table.sort(names)
 
-  section("ATTACHED PERIPHERALS")
-  line("Count: " .. #names)
-
-  local bridges = {}
+  local bridgeRefs = {}
   for _, name in ipairs(names) do
-    if outputStopped then break end
     local types = peripheralTypes(name)
     local methods = peripheral.getMethods(name) or {}
     table.sort(methods)
-
-    line("")
-    line("Peripheral: " .. name)
-    line("Types: " .. table.concat(types, ", "))
-    line("Methods (" .. #methods .. "): " .. table.concat(methods, ", "))
-
+    dump.peripherals[#dump.peripherals + 1] = {
+      name = name,
+      types = types,
+      methods = methods,
+      methodCount = #methods
+    }
     if contains(types, "me_bridge") then
-      bridges[#bridges + 1] = {name = name, methods = methods, types = types}
+      bridgeRefs[#bridgeRefs + 1] = {name = name, methods = methods, types = types}
     end
     checkpoint()
   end
 
-  if #bridges == 0 then
-    section("ME BRIDGE")
-    line("No peripheral with type 'me_bridge' was found.")
-  else
-    section("ME BRIDGE READ-ONLY PROBES")
-    line("Bridge count: " .. #bridges)
+  for _, bridge in ipairs(bridgeRefs) do
+    local bridgeDump = {
+      name = bridge.name,
+      types = bridge.types,
+      methods = bridge.methods,
+      readOnlyResults = {},
+      targetedProbes = {},
+      deepCraftingTaskLookups = {}
+    }
+    local taskIds = {}
 
-    for _, bridge in ipairs(bridges) do
-      if outputStopped then break end
-      line("")
-      line(string.rep("-", 78))
-      line("Bridge: " .. bridge.name)
-      line(string.rep("-", 78))
-
-      local taskIds = {}
-      for _, method in ipairs(bridge.methods) do
-        if outputStopped then break end
-        if isReadOnlyMethod(method) then
-          line("")
-          line("METHOD " .. method .. "()")
-          local ok, returned = callPeripheral(bridge.name, method)
-          if not ok then
-            line("ERROR: " .. safeToString(returned))
-          else
-            local raw = {n = returned.n}
-            for i = 1, returned.n do
-              raw[i] = returned[i]
-              collectTaskIds(returned[i], taskIds)
-            end
-            line(serialize(sanitize(raw)))
-          end
-          checkpoint(true)
-        end
+    for _, method in ipairs(bridge.methods) do
+      if isReadOnlyMethod(method) then
+        local captured, rawReturned = captureProbe(bridge.name, method)
+        bridgeDump.readOnlyResults[method] = captured
+        if rawReturned then collectReturnedTaskIds(rawReturned, taskIds) end
+        checkpoint(true)
       end
+    end
 
-      if not outputStopped then
-        line("")
-        line("APPLIED FLUX TARGETED PROBES")
-        local fluxFilters = {
-          {name = "appflux:fe"},
-          {id = "appflux:fe"},
-          {fingerprint = "appflux:fe"},
-          {resource = "appflux:fe"},
-          {type = "appflux:fe"},
-          {name = "appflux:fe", displayName = "FE"},
-          "appflux:fe"
-        }
-        local fluxMethods = {getItem = true, getChemical = true, getFluid = true, getAmount = true}
-        for _, method in ipairs(bridge.methods) do
-          if outputStopped then break end
-          if fluxMethods[method] then
-            for _, filter in ipairs(fluxFilters) do
-              line("")
-              line("METHOD " .. method .. "(" .. serialize(filter) .. ")")
-              local ok, returned = callPeripheral(bridge.name, method, filter)
-              if not ok then
-                line("ERROR: " .. safeToString(returned))
-              else
-                local raw = {n = returned.n}
-                for i = 1, returned.n do raw[i] = returned[i] end
-                line(serialize(sanitize(raw)))
-              end
-              checkpoint(true)
-            end
-          end
-        end
-      end
+    local noArgTargets = {
+      "listItems", "getItems", "listFluids", "getFluids", "listChemicals", "getChemicals",
+      "listCells", "getCells", "listCraftingCPUs", "getCraftingCPUs", "getEnergyStorage",
+      "getMaxEnergyStorage", "getEnergyUsage", "getAvgPowerInjection", "getAvgPowerUsage"
+    }
+    for _, method in ipairs(noArgTargets) do
+      addTargetedProbe(bridgeDump.targetedProbes, bridge.name, bridge.methods, method, {}, "targeted no-arg AE2/FE/fluid inventory probe")
+    end
 
-      local taskMethods = {}
-      for _, method in ipairs(bridge.methods) do
-        if method == "getCraftingTask" or method == "getCraftingJob" then
-          taskMethods[#taskMethods + 1] = method
-        end
-      end
-
-      if not outputStopped and next(taskIds) and #taskMethods > 0 then
-        line("")
-        line("DEEP CRAFTING TASK LOOKUPS")
-        local orderedIds = {}
-        for id in pairs(taskIds) do orderedIds[#orderedIds + 1] = id end
-        table.sort(orderedIds)
-
-        for _, id in ipairs(orderedIds) do
-          if outputStopped then break end
-          for _, method in ipairs(taskMethods) do
-            line("")
-            line("METHOD " .. method .. "(" .. id .. ")")
-            local ok, returned = callPeripheral(bridge.name, method, id)
-            if not ok then
-              line("ERROR: " .. safeToString(returned))
-            else
-              local raw = {n = returned.n}
-              for i = 1, returned.n do raw[i] = returned[i] end
-              line(serialize(sanitize(raw)))
-            end
-            checkpoint(true)
-          end
+    local filters = {
+      {name = "appflux:fe"},
+      {id = "appflux:fe"},
+      {fingerprint = "appflux:fe"},
+      {resource = "appflux:fe"},
+      {type = "appflux:fe"},
+      {name = "appflux:fe", displayName = "FE"},
+      "appflux:fe",
+      {name = "ae2:charged_certus_quartz_crystal"},
+      {name = "minecraft:water"},
+      {name = "minecraft:lava"}
+    }
+    local filteredMethods = {
+      "getItem", "getFluid", "getChemical", "getAmount", "getItemDetail",
+      "getFluidDetail", "getChemicalDetail"
+    }
+    for _, method in ipairs(filteredMethods) do
+      if methodExists(bridge.methods, method) then
+        for _, filter in ipairs(filters) do
+          addTargetedProbe(bridgeDump.targetedProbes, bridge.name, bridge.methods, method, {filter}, "known-value filter shape probe")
         end
       end
     end
+
+    local orderedIds = {}
+    for id in pairs(taskIds) do orderedIds[#orderedIds + 1] = id end
+    table.sort(orderedIds)
+    local taskMethods = {}
+    for _, method in ipairs({"getCraftingTask", "getCraftingJob"}) do
+      if methodExists(bridge.methods, method) then taskMethods[#taskMethods + 1] = method end
+    end
+    for _, id in ipairs(orderedIds) do
+      for _, method in ipairs(taskMethods) do
+        local captured = captureProbe(bridge.name, method, {id})
+        bridgeDump.deepCraftingTaskLookups[#bridgeDump.deepCraftingTaskLookups + 1] = {
+          method = method,
+          args = {id},
+          result = captured
+        }
+        checkpoint(true)
+      end
+    end
+
+    dump.bridges[#dump.bridges + 1] = bridgeDump
   end
 
-  if not outputStopped then
-    section("SUMMARY")
-    line("Attached peripherals: " .. #names)
-    line("ME bridges: " .. #bridges)
-    line(string.format("Elapsed: %.2f seconds", os.clock() - startClock))
-    line("Output: " .. OUTPUT_FILE)
-    line("Bytes written: " .. bytesWritten)
+  dump.summary = {
+    peripheralCount = #names,
+    meBridgeCount = #bridgeRefs,
+    elapsedSeconds = tonumber(string.format("%.3f", os.clock() - startClock)),
+    bytesWrittenBeforeJson = bytesWritten
+  }
+
+  local encoded = serializeJson(dump)
+  if #encoded > outputBudget then
+    dump.meta.truncated = true
+    dump.meta.truncatedReason = "Encoded JSON exceeded output budget; readOnlyResults were removed but targetedProbes were kept."
+    for _, bridgeDump in ipairs(dump.bridges) do
+      bridgeDump.readOnlyResults = {
+        __removed = "Removed to fit output budget",
+        methodCount = #(bridgeDump.methods or {})
+      }
+    end
+    encoded = serializeJson(dump)
   end
+  writeRaw(encoded)
+  writeRaw("\n")
 end
 
 local ok, fatalError = xpcall(runDump, function(err)

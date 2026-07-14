@@ -25,12 +25,12 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.1"
+local VERSION = "2026-07-14.2"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
 local DUMP_SCRIPT = "ae2-dump.lua"
-local DUMP_FILE = "ae2-dump.txt"
+local DUMP_FILE = "ae2-dump.json"
 local LAST_PASTE_FILE = ".ae2_last_paste"
 local PASTEBIN_KEY_FILE = ".ae2_pastebin_key"
 local STATE_FILE = ".ae2_usage_state"
@@ -918,7 +918,7 @@ local function uploadDumpToPastebin()
     "https://pastebin.com/api/api_post.php",
     "api_option=paste&" ..
     "api_dev_key=" .. textutils.urlEncode(pastebinKey) .. "&" ..
-    "api_paste_format=lua&" ..
+    "api_paste_format=javascript&" ..
     "api_paste_name=" .. textutils.urlEncode("AE2 diagnostic " .. tostring(os.getComputerID())) .. "&" ..
     "api_paste_code=" .. textutils.urlEncode(body)
   )
@@ -2109,7 +2109,7 @@ local function renderTools(screen, data, h)
     y = y + 1
   end
   if y <= bottom then
-    writeAt(2, y, "ae2-dump.txt and uploads if " .. PASTEBIN_KEY_FILE .. " exists.", colors.lightGray, colors.black, w - 2)
+    writeAt(2, y, "ae2-dump.json and uploads if " .. PASTEBIN_KEY_FILE .. " exists.", colors.lightGray, colors.black, w - 2)
     y = y + 2
   end
 
