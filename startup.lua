@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.2"
+local VERSION = "2026-07-14.3"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -838,9 +838,9 @@ local function setListPage(screen, page, delta)
   listPages[screen][page] = math.max(1, n(listPages[screen][page] or 1) + delta)
 end
 
-function setStatus(message)
+function setStatus(message, seconds)
   statusMessage = message
-  statusUntil = nowSeconds() + 8
+  statusUntil = nowSeconds() + (seconds or 8)
 end
 
 local function runUpdater()
@@ -954,23 +954,25 @@ local function runDiagnosticUpload()
   if not ran or runResult == false or not fs.exists(DUMP_FILE) then
     toolBusy = false
     lastPasteError = ran and "Diagnostic script failed" or tostring(runResult)
-    setStatus("Dump failed: " .. lastPasteError)
+    setStatus("Dump failed: " .. lastPasteError, 30)
     return true
   end
+  lastDumpSize = fs.getSize(DUMP_FILE) or 0
 
   setStatus("Uploading diagnostic to Pastebin...")
   local url, uploadError = uploadDumpToPastebin()
   toolBusy = false
   if not url then
     lastPasteError = tostring(uploadError)
-    setStatus("Upload failed: " .. lastPasteError)
+    setStatus("Saved " .. DUMP_FILE .. "; upload failed", 30)
     return true
   end
 
   lastPasteUrl = url
+  lastPasteError = nil
   local h = fs.open(LAST_PASTE_FILE, "w")
   if h then h.write(url); h.close() end
-  setStatus("Paste ready: " .. url)
+  setStatus("Paste ready: " .. url, 30)
   return true
 end
 
@@ -2134,6 +2136,14 @@ local function renderTools(screen, data, h)
     writeAt(2, y, "LAST ERROR", colors.black, colors.red, w - 2)
     y = y + 1
     if y <= bottom then writeAt(2, y, lastPasteError, colors.red, colors.black, w - 2) end
+    y = y + 1
+    if y <= bottom and lastDumpSize > 0 then
+      writeAt(2, y, "Saved " .. DUMP_FILE .. " (" .. fmt(lastDumpSize) .. " bytes)", colors.lightGray, colors.black, w - 2)
+      y = y + 1
+    end
+    if y <= bottom then
+      writeAt(2, y, "Terminal fallback: pastebin put " .. DUMP_FILE, colors.yellow, colors.black, w - 2)
+    end
   elseif y <= bottom then
     writeAt(2, y, "No diagnostic has been uploaded yet.", colors.lightGray, colors.black, w - 2)
   end
