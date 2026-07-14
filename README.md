@@ -19,7 +19,7 @@ The bottom row is a persistent touch navigation bar:
 - **Overview** — health, storage, Applied Flux FE cell stored/trend when exposed, active crafting, and the most important alert.
 - **Crafting** — active AE2 crafting jobs, progress, crafted quantity, sampled rate, ETA, CPU, bytes, and subpart information when Advanced Peripherals exposes it.
 - **Stock** — confirmed material drops, recent use, ATM10 bottleneck warnings, and `IGN` controls.
-- **Storage** — paged largest-item list and manual/automatic bulk-cell markers.
+- **Storage** — paged largest-item list and manual/automatic infinity/bulk-cell markers.
 - **Movers** — recent item deltas sorted by movement rate, with per-minute and per-hour estimates.
 - **System** — grid status, cells, drives, Applied Flux FE cell storage/trend, AE buffer/bridge power flow, crafting CPUs, version, and updater.
 - **Tools** — one-touch AE2 diagnostic generation and optional Pastebin upload, with the latest link shown on the monitor.
@@ -87,11 +87,11 @@ Pastebin upload needs a local `.ae2_pastebin_key` file on the ComputerCraft comp
 
 One connected monitor wall is exposed by CC:Tweaked as one large monitor. Separate attached monitors each render the dashboard and can be navigated independently.
 
-## Bulk Cell Markers
+## Infinity / Bulk Cell Markers
 
-The Storage page shows `BULK` when the script can associate an item with a bulk storage cell. Auto-detection depends on the information returned by Advanced Peripherals and may not identify the partitioned item on every pack version.
+The Storage page shows `INF` when the script can associate an item with an infinity/bulk-backed storage source. Auto-detection depends on the information returned by Advanced Peripherals and may not identify the partitioned item on every pack version.
 
-Tap `B+` to manually mark an item as bulk-backed. Tap `BULK` to remove the manual marker. Manual markers persist in `.ae2_bulk_items`.
+Tap `INF+` to manually mark an item as infinity/bulk-backed. Tap `INF` to remove the manual marker. Manual markers persist in `.ae2_bulk_items`.
 
 You can also edit the file directly:
 
@@ -113,7 +113,7 @@ Usage history is stored in `.ae2_usage_state`. The monitor waits for repeated co
 
 `RECENT USE` is a softer signal based on repeated movement. Storage cells, spatial items, patterns, and similar infrastructure items are filtered to reduce false warnings.
 
-Tap `IGN` beside a confirmed warning to ignore it. To clear learned history and ignored items:
+Tap `IGN` beside a confirmed warning or low-stock row to ignore it. To clear learned history and ignored items:
 
 ```lua
 delete .ae2_usage_state
@@ -126,4 +126,4 @@ Some Advanced Peripherals builds expose terminal-started jobs only through a cra
 
 The Crafting page also uses `getPatterns()` to show the immediate recipe inputs for the active output. Stock estimates can under-count outputs that are consumed immediately by parent recipes, or over-count items imported from elsewhere.
 
-When `getDrives()` returns no location data, the System page reports drive data as unavailable and shows the exposed pattern count instead. Automatic bulk-item association is disabled when cell objects do not expose their configured contents; manual `B+` markers continue to work.
+When `getDrives()` returns no location data, the System page reports drive data as unavailable and shows the exposed pattern count instead. Automatic infinity/bulk-item association is disabled when cell objects do not expose their configured contents; manual `INF+` markers continue to work.

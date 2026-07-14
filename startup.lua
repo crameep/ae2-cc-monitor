@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-13.8"
+local VERSION = "2026-07-13.9"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -933,9 +933,9 @@ local function toggleBulk(button)
   if marked == nil then
     setStatus("Could not save bulk marker")
   elseif marked then
-    setStatus("Bulk marker added: " .. button.name)
+    setStatus("Infinity marker added: " .. button.name)
   else
-    setStatus("Bulk marker removed: " .. button.name)
+    setStatus("Infinity marker removed: " .. button.name)
   end
 end
 
@@ -1781,9 +1781,11 @@ local function renderStock(screen, data, h)
   writeAt(2, headerY, "ATM10 LOW STOCK", colors.black, colors.yellow, w - 2)
   bottomPageControls(screen, "stock", navY, pageNumber, pageCount)
 
+  local ignoreW = 4
   local amountW = w >= 70 and 13 or 10
   local groupW = w >= 70 and 12 or 8
-  local amountX = w - amountW + 1
+  local ignoreX = math.max(1, w - ignoreW + 1)
+  local amountX = math.max(1, ignoreX - amountW - 1)
   local groupX = amountX - groupW - 1
   local itemW = math.max(8, groupX - 3)
 
@@ -1791,6 +1793,7 @@ local function renderStock(screen, data, h)
   writeAt(2, columnY, "ITEM", colors.black, colors.lightGray, itemW)
   writeAt(groupX, columnY, "GROUP", colors.black, colors.lightGray, groupW)
   writeAt(amountX, columnY, "COUNT/TARGET", colors.black, colors.lightGray, amountW)
+  writeAt(ignoreX, columnY, "IGN", colors.black, colors.lightGray, ignoreW)
 
   if #data.lowStock == 0 then
     writeAt(2, firstRowY, "No watched ATM10 bottlenecks are low", colors.lightGray, colors.black, w - 2)
@@ -1810,6 +1813,8 @@ local function renderStock(screen, data, h)
     writeAt(2, rowY, row.name, colors.white, bg, itemW)
     writeAt(groupX, rowY, row.group, colors.lightGray, bg, groupW)
     writeAt(math.max(amountX, w - #amountText + 1), rowY, amountText, amountColor, bg, amountW)
+    writeAt(ignoreX, rowY, "IGN", colors.white, colors.gray, ignoreW)
+    registerButton(screen, {x = ignoreX, x2 = w, y = rowY, action = "ignore", key = row.key, name = row.name})
     rowY = rowY + 1
   end
 end
@@ -1832,7 +1837,7 @@ local function renderStorage(screen, data, h)
   local itemW = math.max(8, markerX - 3)
 
   clearLine(y, colors.black)
-  local bulkText = data.bulkAutoAvailable and (data.bulkItemMatches .. " bulk-marked") or (data.bulkItemMatches .. " manual bulk | auto unavailable")
+  local bulkText = data.bulkAutoAvailable and (data.bulkItemMatches .. " inf-marked") or (data.bulkItemMatches .. " manual inf | auto unavailable")
   writeAt(2, y, #data.top .. " item types  |  " .. bulkText .. "  |  " .. data.nearFullCellCount .. " cells >95%", colors.lightGray, colors.black, w - 2)
   bottomPageControls(screen, "storage", navY, pageNumber, pageCount)
   y = y + 1
@@ -1853,7 +1858,7 @@ local function renderStorage(screen, data, h)
     if y > bottom then break end
     local row = data.top[i]
     local amountText = fmt(row.amount)
-    local marker = row.bulk and "BULK" or "B+"
+    local marker = row.bulk and "INF" or "INF+"
     local rowBg = row.bulk and colors.purple or ((i % 2 == 0) and colors.gray or colors.black)
     clearLine(y, rowBg)
     local amountCell = string.rep(" ", math.max(0, amountW - #amountText)) .. amountText
@@ -2185,9 +2190,9 @@ while true do
       if shouldWatchItem(key, label) then
         top[#top + 1] = {key = key, name = label, amount = amount, bulk = bulkIndex[key]}
       end
-      local stockRule = atm10StockRule(key, label, amount)
+      local stockRule = not usageState.ignored[key] and atm10StockRule(key, label, amount)
       if stockRule then
-        lowStock[#lowStock + 1] = {name = label, amount = amount, target = stockRule.max, ratio = amount / math.max(1, stockRule.max), priority = stockRule.priority, group = stockRule.short or stockRule.label}
+        lowStock[#lowStock + 1] = {key = key, name = label, amount = amount, target = stockRule.max, ratio = amount / math.max(1, stockRule.max), priority = stockRule.priority, group = stockRule.short or stockRule.label}
       end
     end
   end
