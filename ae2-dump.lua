@@ -456,6 +456,18 @@ local function addTargetedProbe(probes, bridgeName, methods, method, args, note)
   checkpoint(true)
 end
 
+local function capturePeripheralReadOnly(name, methods)
+  local results = {}
+  for _, method in ipairs(methods or {}) do
+    if isReadOnlyMethod(method) then
+      local captured = captureProbe(name, method)
+      results[method] = captured
+      checkpoint(true)
+    end
+  end
+  return results
+end
+
 local function runDump()
   local startClock = os.clock()
   local dump = {
@@ -492,7 +504,8 @@ local function runDump()
       name = name,
       types = types,
       methods = methods,
-      methodCount = #methods
+      methodCount = #methods,
+      readOnlyResults = capturePeripheralReadOnly(name, methods)
     }
     if contains(types, "me_bridge") then
       bridgeRefs[#bridgeRefs + 1] = {name = name, methods = methods, types = types}
