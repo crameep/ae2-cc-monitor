@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.7"
+local VERSION = "2026-07-14.8"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/23faa7e/ae2-dump.lua"
@@ -45,6 +45,7 @@ local CONSUMED_WATCH = 2048
 local DROP_EVENTS_REQUIRED = 2
 local LOW_STOCK = 4096
 local FAST_DROP = 1024
+local HUGE_ITEM_COUNT = 1000000000
 local PATTERN_REFRESH_SECONDS = 30
 local FLUX_FE_PER_BYTE = 1048576
 
@@ -550,6 +551,57 @@ local function cellHealth(cells)
     end
   end
   return nearFull, empty
+end
+
+local function cellName(cell)
+  if type(cell) ~= "table" then return "unknown cell" end
+  local item = cell.item
+  if type(item) == "table" then
+    return tostring(item.displayName or item.name or item.id or "unknown cell")
+  end
+  return tostring(cell.name or cell.id or cell.type or "unknown cell")
+end
+
+local function summarizeCells(cells)
+  local groupsByKey, groups = {}, {}
+  for _, cell in pairs(cells or {}) do
+    if type(cell) == "table" then
+      local name = cellName(cell)
+      local cellType = tostring(cell.type or "?")
+      local key = name .. "|" .. cellType
+      local group = groupsByKey[key]
+      if not group then
+        group = {name = cleanLabel(name), type = cellType, count = 0, nonempty = 0, used = 0, total = 0}
+        groupsByKey[key] = group
+        groups[#groups + 1] = group
+      end
+      group.count = group.count + 1
+      local used = n(cell.usedBytes or cell.bytesUsed or cell.used)
+      local total = n(cell.bytes or cell.totalBytes or cell.capacity or cell.total)
+      group.used = group.used + used
+      group.total = group.total + total
+      if used > 0 then group.nonempty = group.nonempty + 1 end
+    end
+  end
+  table.sort(groups, function(a, b)
+    if a.type ~= b.type then return a.type < b.type end
+    if a.total ~= b.total then return a.total > b.total end
+    return a.name < b.name
+  end)
+  return groups
+end
+
+local function topFluids(fluids, limit)
+  local rows = {}
+  for _, fluid in pairs(fluids or {}) do
+    local amount = amountOf(fluid)
+    if amount > 0 then
+      rows[#rows + 1] = {name = itemLabel(fluid), key = itemKey(fluid), amount = amount}
+    end
+  end
+  table.sort(rows, function(a, b) return a.amount > b.amount end)
+  while limit and #rows > limit do rows[#rows] = nil end
+  return rows
 end
 
 local function fluxCellCapacity(cells)
@@ -1606,9 +1658,9 @@ local function rateFmt(value, suffix)
 end
 
 local function powerTrendText(stats)
-  if stats and not stats.known then return "stored FE hidden" end
+  if stats and not stats.known then return "stored AE hidden" end
   if not stats or not stats.trendReady then return "trend learning" end
-  return rateFmt(stats.netPerTick, " FE/t") .. "  " .. rateFmt(stats.netPerMinute, " FE/m")
+  return rateFmt(stats.netPerTick, " AE/t") .. "  " .. rateFmt(stats.netPerMinute, " AE/m")
 end
 
 local function powerEtaText(stats)
@@ -1693,33 +1745,28 @@ local function renderOverview(screen, data, h)
   if bottom - y >= 8 and w >= 42 then
     local gap = 1
     local tileW = math.floor((w - (gap * 2)) / 3)
-    local feValue = data.feKnown and (data.feCapacity > 0 and (math.floor(data.fePct + 0.5) .. "%") or fmt(data.feStored)) or "HIDDEN"
+    local energyValue = data.energyCap > 0 and (math.floor(data.aeEnergyPct + 0.5) .. "%") or fmt(data.energy)
     tile(1, y, tileW, "ITEM STORAGE", math.floor(data.itemPct + 0.5) .. "%", fmt(data.itemUsed) .. " / " .. (data.itemTotal > 0 and fmt(data.itemTotal) or "?"), colors.green)
     tile(tileW + gap + 1, y, tileW, "TYPE SLOTS", math.floor(data.typePct + 0.5) .. "%", data.itemTypes .. " / " .. (data.itemTypeTotal > 0 and data.itemTypeTotal or "?"), colors.yellow)
-    tile((tileW * 2) + (gap * 2) + 1, y, w - ((tileW * 2) + (gap * 2)), "APPFLUX FE", feValue, powerTrendText(data.powerStats), colors.orange)
+    tile((tileW * 2) + (gap * 2) + 1, y, w - ((tileW * 2) + (gap * 2)), "AE ENERGY", energyValue, powerTrendText(data.powerStats), colors.orange)
     y = y + 4
   end
 
   capacityRow(y, "Items", data.itemUsed, data.itemTotal, colors.lime); y = y + 1
   capacityRow(y, "Types", data.itemTypes, data.itemTypeTotal, colors.yellow); y = y + 1
   capacityRow(y, "Fluids", data.fluidUsed, data.fluidTotal, colors.blue); y = y + 1
-  if data.feKnown and data.feCapacity > 0 then
-    capacityRow(y, data.feEstimated and "~FE Cells" or "FE Cells", data.feStored, data.feCapacity, colors.orange)
-  elseif data.feKnown then
-    writeAt(2, y, "FE Cells", colors.lightGray, colors.black, 12)
-    local estimateMark = data.feEstimated and "~" or ""
-    writeAt(15, y, estimateMark .. fmt(data.feStored) .. " FE stored", colors.white, colors.black, w - 15)
+  if data.energyCap > 0 then
+    capacityRow(y, "AE Energy", data.energy, data.energyCap, colors.orange)
   else
-    writeAt(2, y, "FE Cells", colors.lightGray, colors.black, 12)
-    local capText = data.feCapacity > 0 and ("cap " .. fmt(data.feCapacity) .. " FE") or data.feSource
-    writeAt(15, y, "stored hidden  |  " .. capText, colors.orange, colors.black, w - 15)
+    writeAt(2, y, "AE Energy", colors.lightGray, colors.black, 12)
+    writeAt(15, y, fmt(data.energy) .. " AE stored  |  capacity hidden", colors.orange, colors.black, w - 15)
   end
   y = y + 1
   if y <= bottom then
     local etaText = powerEtaText(data.powerStats)
     local rightText = etaText or (fmt(data.usage) .. "/t bridge use")
     local trendColor = (data.powerStats and not data.powerStats.known) and colors.orange or (data.powerStats and data.powerStats.netPerSecond < 0 and colors.orange or colors.lime)
-    writeAt(2, y, "FE Trend", colors.lightGray, colors.black, 12)
+    writeAt(2, y, "AE Trend", colors.lightGray, colors.black, 12)
     writeAt(15, y, powerTrendText(data.powerStats), trendColor, colors.black, math.max(8, w - #rightText - 18))
     writeAt(math.max(1, w - #rightText + 1), y, rightText, etaText and colors.yellow or colors.lightGray, colors.black, #rightText)
     y = y + 2
@@ -1978,7 +2025,7 @@ local function renderStorage(screen, data, h)
 
   clearLine(y, colors.black)
   local bulkText = data.bulkAutoAvailable and (data.bulkItemMatches .. " cell-marked") or (data.manualBulkCount .. " bulk | " .. data.manualInfCount .. " inf | auto unavailable")
-  writeAt(2, y, #data.top .. " item types  |  " .. bulkText .. "  |  " .. data.nearFullCellCount .. " cells >95%", colors.lightGray, colors.black, w - 2)
+  writeAt(2, y, #data.top .. " item types  |  " .. bulkText .. "  |  " .. data.hugeCount .. " huge hints", colors.lightGray, colors.black, w - 2)
   bottomPageControls(screen, "storage", navY, pageNumber, pageCount)
   y = y + 1
 
@@ -1999,9 +2046,9 @@ local function renderStorage(screen, data, h)
     local row = data.top[i]
     local amountText = fmt(row.amount)
     local cellState = row.cellState
-    local marker = cellState == "inf" and "INF" or (cellState == "bulk" and "BULK" or "BULK+")
+    local marker = cellState == "inf" and "INF" or (cellState == "bulk" and "BULK" or (row.huge and "HUGE" or "BULK+"))
     local rowBg = cellState == "inf" and colors.green or (cellState == "bulk" and colors.purple or ((i % 2 == 0) and colors.gray or colors.black))
-    local markerColor = cellState and colors.white or colors.lightGray
+    local markerColor = cellState and colors.white or (row.huge and colors.orange or colors.lightGray)
     clearLine(y, rowBg)
     local amountCell = string.rep(" ", math.max(0, amountW - #amountText)) .. amountText
     writeAt(2, y, row.name, colors.white, rowBg, itemW)
@@ -2096,18 +2143,13 @@ local function renderSystem(screen, data, h)
 
   if y <= bottom then
     clearLine(y, colors.lightGray)
-    writeAt(2, y, "APPFLUX FE CELLS", colors.black, colors.lightGray, w - 2)
+    writeAt(2, y, "AE ENERGY", colors.black, colors.lightGray, w - 2)
     y = y + 1
     writeAt(2, y, "Stored", colors.lightGray, colors.black, 12)
-    if data.feKnown and data.feCapacity > 0 then
-      local estimateMark = data.feEstimated and "~" or ""
-      writeAt(15, y, estimateMark .. fmt(data.feStored) .. " / " .. fmt(data.feCapacity) .. " FE  (" .. math.floor(data.fePct + 0.5) .. "%)", colors.white, colors.black, w - 15)
-    elseif data.feKnown then
-      local estimateMark = data.feEstimated and "~" or ""
-      writeAt(15, y, estimateMark .. fmt(data.feStored) .. " FE stored  |  capacity unknown", colors.white, colors.black, w - 15)
+    if data.energyCap > 0 then
+      writeAt(15, y, fmt(data.energy) .. " / " .. fmt(data.energyCap) .. " AE  (" .. math.floor(data.aeEnergyPct + 0.5) .. "%)", colors.white, colors.black, w - 15)
     else
-      local capText = data.feCapacity > 0 and ("capacity " .. fmt(data.feCapacity) .. " FE") or "no FE cells detected"
-      writeAt(15, y, "Stored amount not exposed  |  " .. capText, colors.orange, colors.black, w - 15)
+      writeAt(15, y, fmt(data.energy) .. " AE stored  |  capacity hidden", colors.orange, colors.black, w - 15)
     end
     y = y + 1
     writeAt(2, y, "Trend", colors.lightGray, colors.black, 12)
@@ -2115,9 +2157,9 @@ local function renderSystem(screen, data, h)
     writeAt(15, y, powerTrendText(data.powerStats), trendColor, colors.black, w - 15)
     y = y + 1
     if y <= bottom then
-      writeAt(2, y, "Source", colors.lightGray, colors.black, 12)
-      local estimateText = data.feEstimated and "approx  |  " or ""
-      writeAt(15, y, estimateText .. data.feSource .. "  |  " .. data.feCellCount .. " cell(s), " .. data.feProbeCount .. " probe(s)", data.feKnown and colors.lightGray or colors.orange, colors.black, w - 15)
+      writeAt(2, y, "Bridge", colors.lightGray, colors.black, 12)
+      local netText = (data.powerNet >= 0 and "+" or "") .. fmt(data.powerNet) .. "/t net"
+      writeAt(15, y, fmt(data.input) .. "/t in  " .. fmt(data.usage) .. "/t used  " .. netText, colors.white, colors.black, w - 15)
       y = y + 1
     end
     local etaText = powerEtaText(data.powerStats)
@@ -2127,14 +2169,9 @@ local function renderSystem(screen, data, h)
       y = y + 1
     end
     if y <= bottom then
-      writeAt(2, y, "AE Buffer", colors.lightGray, colors.black, 12)
-      writeAt(15, y, fmt(data.energy) .. " / " .. (data.energyCap > 0 and fmt(data.energyCap) or "?") .. " AE", colors.lightGray, colors.black, w - 15)
-      y = y + 1
-    end
-    if y <= bottom then
-      writeAt(2, y, "Bridge", colors.lightGray, colors.black, 12)
-      local netText = (data.powerNet >= 0 and "+" or "") .. fmt(data.powerNet) .. "/t net"
-      writeAt(15, y, fmt(data.input) .. "/t in  " .. fmt(data.usage) .. "/t used  " .. netText, colors.white, colors.black, w - 15)
+      writeAt(2, y, "AppFlux", colors.lightGray, colors.black, 12)
+      local fluxText = data.feKnown and (fmt(data.feStored) .. " FE exposed") or "FE storage not exposed"
+      writeAt(15, y, fluxText .. "  |  " .. data.feProbeCount .. " probe(s)", data.feKnown and colors.lightGray or colors.orange, colors.black, w - 15)
       y = y + 1
     end
     y = y + 1
@@ -2142,8 +2179,50 @@ local function renderSystem(screen, data, h)
 
   if y <= bottom then
     clearLine(y, colors.lightGray)
-    writeAt(2, y, "CRAFTING CPUs", colors.black, colors.lightGray, w - 2)
+    writeAt(2, y, "CELL HARDWARE", colors.black, colors.lightGray, w - 2)
     y = y + 1
+    if #data.cellGroups == 0 then
+      writeAt(2, y, "No storage cell data exposed", colors.lightGray, colors.black, w - 2)
+      y = y + 1
+    else
+      for _, group in ipairs(data.cellGroups) do
+        if y > bottom then break end
+        local pctText = group.total > 0 and (" " .. math.floor(pct(group.used, group.total) + 0.5) .. "%") or ""
+        local line = group.count .. "x " .. group.name .. "  " .. group.nonempty .. " used  " .. fmt(group.used) .. "/" .. fmt(group.total) .. pctText
+        local color = group.type == "ae2:f" and colors.cyan or colors.white
+        writeAt(2, y, line, color, colors.black, w - 2)
+        y = y + 1
+      end
+    end
+    y = y + 1
+  end
+
+  if y <= bottom then
+    clearLine(y, colors.lightGray)
+    writeAt(2, y, "TOP FLUIDS", colors.black, colors.lightGray, w - 2)
+    y = y + 1
+    if #data.topFluids == 0 then
+      writeAt(2, y, "No stored fluids reported", colors.lightGray, colors.black, w - 2)
+      y = y + 1
+    else
+      for i = 1, math.min(#data.topFluids, math.max(1, bottom - y + 1)) do
+        local fluid = data.topFluids[i]
+        local amountText = fmt(fluid.amount)
+        local amountW = math.min(14, math.max(10, #amountText))
+        writeAt(2, y, fluid.name, colors.cyan, colors.black, math.max(8, w - amountW - 3))
+        writeAt(math.max(1, w - amountW + 1), y, amountText, colors.white, colors.black, amountW)
+        y = y + 1
+      end
+    end
+    y = y + 1
+  end
+
+  if y <= bottom then
+    if y <= bottom then
+      clearLine(y, colors.lightGray)
+      writeAt(2, y, "CRAFTING CPUs", colors.black, colors.lightGray, w - 2)
+      y = y + 1
+    end
     if #data.cpus == 0 then
       writeAt(2, y, "No crafting CPU data exposed", colors.lightGray, colors.black, w - 2)
       y = y + 1
@@ -2343,7 +2422,8 @@ local function collectDashboardData()
       local label = itemLabel(item)
       local key = itemKey(item)
       if shouldWatchItem(key, label) then
-        d.top[#d.top + 1] = {key = key, name = label, amount = amount, cellState = d.bulkIndex[key]}
+        local cellState = d.bulkIndex[key]
+        d.top[#d.top + 1] = {key = key, name = label, amount = amount, cellState = cellState, huge = amount >= HUGE_ITEM_COUNT and cellState == nil}
       end
       local stockRule = not usageState.ignored[key] and atm10StockRule(key, label, amount)
       if stockRule then
@@ -2352,6 +2432,10 @@ local function collectDashboardData()
     end
   end
   table.sort(d.top, function(a, b) return a.amount > b.amount end)
+  d.hugeCount = 0
+  for _, row in ipairs(d.top) do
+    if row.huge then d.hugeCount = d.hugeCount + 1 end
+  end
   table.sort(d.lowStock, function(a, b)
     if a.priority ~= b.priority then return a.priority > b.priority end
     if a.ratio ~= b.ratio then return a.ratio < b.ratio end
@@ -2365,6 +2449,7 @@ local function collectDashboardData()
     d.fluidTypes = d.fluidTypes + 1
     d.fluidAmount = d.fluidAmount + amountOf(fluid)
   end
+  d.topFluids = topFluids(d.fluids, 12)
 
   d.itemUsed = call("getUsedItemStorage", d.itemCount)
   d.itemTotal = call("getTotalItemStorage", 0)
@@ -2376,14 +2461,17 @@ local function collectDashboardData()
   d.input = callAny({"getAverageEnergyInput", "getAvgPowerInjection"}, 0)
 
   d.fluxInfo = detectFluxEnergy(d.items, d.fluids, d.chemicals, d.fluxProbeRows, d.cells, d.energy, d.energyCap)
-  d.powerStats = updatePowerStats(d.fluxInfo)
+  d.aeEnergyInfo = {stored = d.energy, capacity = d.energyCap, known = d.energyCap > 0, estimated = false, source = "ME bridge AE energy"}
+  d.powerStats = updatePowerStats(d.aeEnergyInfo)
   d.itemTypeTotal, d.fluidTypeTotal, d.itemCellCount, d.fluidCellCount = typeSlots(d.cells)
+  d.cellGroups = summarizeCells(d.cells)
   d.itemPct = pct(d.itemUsed, d.itemTotal)
   d.typePct = pct(d.itemTypes, d.itemTypeTotal)
   d.fluidPct = pct(d.fluidUsed, d.fluidTotal)
   d.fluidTypePct = pct(d.fluidTypes, d.fluidTypeTotal)
   d.powerPct = pct(d.energy, d.energyCap)
   d.fePct = d.fluxInfo.known and pct(d.fluxInfo.stored, d.fluxInfo.capacity) or 0
+  d.aeEnergyPct = pct(d.energy, d.energyCap)
   d.powerNet = d.input - d.usage
   d.powerBufferSeconds = d.powerNet < 0 and d.energy / math.max(1, (-d.powerNet) * 20) or 0
   d.nearFullCellCount, d.emptyCellCount = cellHealth(d.cells)
@@ -2402,10 +2490,10 @@ local function collectDashboardData()
     d.health, d.healthColor, d.healthDetail = "ITEM STORAGE FULL", colors.red, "add item storage"
   elseif d.typePct >= 85 then
     d.health, d.healthColor, d.healthDetail = "TYPE SLOTS FULL", colors.red, "add type capacity"
-  elseif d.fluxInfo.known and d.fluxInfo.capacity > 0 and d.fePct < 20 then
-    d.health, d.healthColor, d.healthDetail = "LOW FE", colors.red, "FE cells " .. math.floor(d.fePct + 0.5) .. "%"
+  elseif d.aeEnergyInfo.known and d.aeEnergyPct < 20 then
+    d.health, d.healthColor, d.healthDetail = "LOW AE ENERGY", colors.red, "AE buffer " .. math.floor(d.aeEnergyPct + 0.5) .. "%"
   elseif d.powerStats.trendReady and d.powerStats.etaMode == "empty" and d.powerStats.eta > 0 and d.powerStats.eta < 1800 then
-    d.health, d.healthColor, d.healthDetail = "FE DRAIN", colors.orange, "empty in " .. duration(d.powerStats.eta)
+    d.health, d.healthColor, d.healthDetail = "AE ENERGY DRAIN", colors.orange, "empty in " .. duration(d.powerStats.eta)
   elseif d.fluidPct >= 90 then
     d.health, d.healthColor, d.healthDetail = "FLUID STORAGE FULL", colors.orange, "add fluid storage"
   elseif d.fluidTypePct >= 85 then
