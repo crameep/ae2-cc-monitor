@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-13.7"
+local VERSION = "2026-07-13.8"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -1527,17 +1527,22 @@ local function drawNav(screen, page, h)
   end
 end
 
-local function pageControls(screen, page, y, pageNumber, pageCount)
+local function bottomPageControls(screen, page, y, pageNumber, pageCount)
   local w = mon.getSize()
   pageNumber = math.max(1, math.min(pageNumber, pageCount))
-  local text = "PAGE " .. pageNumber .. "/" .. pageCount
-  writeAt(math.max(1, w - #text - 12), y, text, colors.lightGray, colors.black, #text)
-  local prevX = math.max(1, w - 10)
-  local nextX = math.max(1, w - 4)
-  writeAt(prevX, y, "<", pageNumber > 1 and colors.white or colors.gray, colors.blue, 3)
-  writeAt(nextX, y, ">", pageNumber < pageCount and colors.white or colors.gray, colors.blue, 3)
-  if pageNumber > 1 then registerButton(screen, {x = prevX, x2 = prevX + 2, y = y, action = "page", page = page, delta = -1}) end
-  if pageNumber < pageCount then registerButton(screen, {x = nextX, x2 = nextX + 2, y = y, action = "page", page = page, delta = 1}) end
+  local navHeight = 2
+  local buttonW = math.max(10, math.floor((w - 6) / 2))
+  local prevX = 2
+  local nextX = math.max(2, w - buttonW + 1)
+  local pageText = tostring(pageNumber) .. "/" .. tostring(pageCount)
+
+  fillRect(1, y, w, navHeight, colors.blue)
+  writeAt(prevX + math.max(0, math.floor((buttonW - 6) / 2)), y, "< PREV", pageNumber > 1 and colors.white or colors.lightGray, colors.blue, 6)
+  writeAt(nextX + math.max(0, math.floor((buttonW - 6) / 2)), y, "NEXT >", pageNumber < pageCount and colors.white or colors.lightGray, colors.blue, 6)
+  writeAt(math.max(1, math.floor((w - #pageText) / 2) + 1), y + 1, pageText, colors.black, colors.yellow, #pageText)
+
+  if pageNumber > 1 then registerButton(screen, {x = prevX, x2 = prevX + buttonW - 1, y = y, y2 = y + navHeight - 1, action = "page", page = page, delta = -1}) end
+  if pageNumber < pageCount then registerButton(screen, {x = nextX, x2 = nextX + buttonW - 1, y = y, y2 = y + navHeight - 1, action = "page", page = page, delta = 1}) end
 end
 
 local function renderOverview(screen, data, h)
@@ -1637,7 +1642,8 @@ end
 
 local function renderCrafting(screen, data, h)
   local w = mon.getSize()
-  local bottom = h - 1
+  local navY = h - 2
+  local bottom = h - 3
   clearLine(3, colors.black)
   writeAt(2, 3, tostring(#data.tasks) .. " active job(s)  |  " .. data.busyCpuCount .. "/" .. #data.cpus .. " CPUs busy", colors.lightGray, colors.black, math.max(8, w - 25))
 
@@ -1675,7 +1681,7 @@ local function renderCrafting(screen, data, h)
   listPages[screen] = listPages[screen] or {}
   local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen].crafting or 1)))
   listPages[screen].crafting = pageNumber
-  pageControls(screen, "crafting", 3, pageNumber, pageCount)
+  bottomPageControls(screen, "crafting", navY, pageNumber, pageCount)
 
   local startIndex = ((pageNumber - 1) * perPage) + 1
   local y = 4
@@ -1718,7 +1724,8 @@ end
 
 local function renderStock(screen, data, h)
   local w = mon.getSize()
-  local bottom = h - 1
+  local navY = h - 2
+  local bottom = h - 3
   local y = 3
 
   clearLine(y, colors.black)
@@ -1771,16 +1778,8 @@ local function renderStock(screen, data, h)
   listPages[screen].stock = pageNumber
 
   clearLine(headerY, colors.yellow)
-  writeAt(2, headerY, "ATM10 LOW STOCK", colors.black, colors.yellow, math.max(8, w - 18))
-  local pageText = tostring(pageNumber) .. "/" .. tostring(pageCount)
-  local nextX = math.max(1, w - 2)
-  local pageX = math.max(1, nextX - #pageText - 2)
-  local prevX = math.max(1, pageX - 4)
-  writeAt(prevX, headerY, " < ", pageNumber > 1 and colors.white or colors.gray, colors.blue, 3)
-  writeAt(pageX, headerY, pageText, colors.black, colors.yellow, #pageText)
-  writeAt(nextX, headerY, ">", pageNumber < pageCount and colors.white or colors.gray, colors.blue, 1)
-  if pageNumber > 1 then registerButton(screen, {x = prevX, x2 = prevX + 2, y = headerY, action = "page", page = "stock", delta = -1}) end
-  if pageNumber < pageCount then registerButton(screen, {x = nextX, x2 = w, y = headerY, action = "page", page = "stock", delta = 1}) end
+  writeAt(2, headerY, "ATM10 LOW STOCK", colors.black, colors.yellow, w - 2)
+  bottomPageControls(screen, "stock", navY, pageNumber, pageCount)
 
   local amountW = w >= 70 and 13 or 10
   local groupW = w >= 70 and 12 or 8
@@ -1817,7 +1816,8 @@ end
 
 local function renderStorage(screen, data, h)
   local w = mon.getSize()
-  local bottom = h - 1
+  local navY = h - 2
+  local bottom = h - 3
   local y = 3
   local headerRows = 2
   local rowsAvailable = math.max(1, bottom - (y + headerRows) + 1)
@@ -1833,8 +1833,8 @@ local function renderStorage(screen, data, h)
 
   clearLine(y, colors.black)
   local bulkText = data.bulkAutoAvailable and (data.bulkItemMatches .. " bulk-marked") or (data.bulkItemMatches .. " manual bulk | auto unavailable")
-  writeAt(2, y, #data.top .. " item types  |  " .. bulkText .. "  |  " .. data.nearFullCellCount .. " cells >95%", colors.lightGray, colors.black, math.max(8, markerX - 4))
-  pageControls(screen, "storage", y, pageNumber, pageCount)
+  writeAt(2, y, #data.top .. " item types  |  " .. bulkText .. "  |  " .. data.nearFullCellCount .. " cells >95%", colors.lightGray, colors.black, w - 2)
+  bottomPageControls(screen, "storage", navY, pageNumber, pageCount)
   y = y + 1
 
   clearLine(y, colors.lightGray)
@@ -1867,7 +1867,8 @@ end
 
 local function renderMovers(screen, data, h)
   local w = mon.getSize()
-  local bottom = h - 1
+  local navY = h - 2
+  local bottom = h - 3
   local y = 3
   local rowsAvailable = math.max(1, bottom - (y + 2) + 1)
   local pageCount = math.max(1, math.ceil(#data.movers / rowsAvailable))
@@ -1877,8 +1878,8 @@ local function renderMovers(screen, data, h)
 
   clearLine(y, colors.black)
   local summary = #data.movers .. " changing item type" .. (#data.movers == 1 and "" or "s")
-  writeAt(2, y, summary .. "  |  sampled every " .. SAMPLE_SECONDS .. "s", colors.lightGray, colors.black, math.max(8, w - 18))
-  pageControls(screen, "movers", y, pageNumber, pageCount)
+  writeAt(2, y, summary .. "  |  sampled every " .. SAMPLE_SECONDS .. "s", colors.lightGray, colors.black, w - 2)
+  bottomPageControls(screen, "movers", navY, pageNumber, pageCount)
   y = y + 1
 
   local nowW = w >= 72 and 10 or 0
