@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.10"
+local VERSION = "2026-07-14.11"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/23faa7e/ae2-dump.lua"
@@ -2264,7 +2264,8 @@ end
 
 local function renderSystem(screen, data, h)
   local w = mon.getSize()
-  local bottom = h - 1
+  local footerY = h - 1
+  local bottom = h - 2
   local y = 3
 
   clearLine(y, colors.black)
@@ -2341,26 +2342,6 @@ local function renderSystem(screen, data, h)
   end
 
   if y <= bottom then
-    clearLine(y, colors.lightGray)
-    writeAt(2, y, "TOP FLUIDS", colors.black, colors.lightGray, w - 2)
-    y = y + 1
-    if #data.topFluids == 0 then
-      writeAt(2, y, "No stored fluids reported", colors.lightGray, colors.black, w - 2)
-      y = y + 1
-    else
-      for i = 1, math.min(#data.topFluids, math.max(1, bottom - y + 1)) do
-        local fluid = data.topFluids[i]
-        local amountText = fmt(fluid.amount)
-        local amountW = math.min(14, math.max(10, #amountText))
-        writeAt(2, y, fluid.name, colors.cyan, colors.black, math.max(8, w - amountW - 3))
-        writeAt(math.max(1, w - amountW + 1), y, amountText, colors.white, colors.black, amountW)
-        y = y + 1
-      end
-    end
-    y = y + 1
-  end
-
-  if y <= bottom then
     if y <= bottom then
       clearLine(y, colors.lightGray)
       writeAt(2, y, "CRAFTING CPUs", colors.black, colors.lightGray, w - 2)
@@ -2383,12 +2364,8 @@ local function renderSystem(screen, data, h)
     end
   end
 
-  if y <= bottom then
-    y = math.max(y + 1, bottom - 1)
-    if y <= bottom then
-      writeAt(2, y, "v" .. VERSION .. "  |  refresh 3s  |  usage sample " .. SAMPLE_SECONDS .. "s", colors.lightGray, colors.black, w - 2)
-    end
-  end
+  clearLine(footerY, colors.black)
+  writeAt(2, footerY, "v" .. VERSION .. "  |  refresh 3s  |  usage sample " .. SAMPLE_SECONDS .. "s", colors.lightGray, colors.black, w - 2)
 end
 
 local function renderTools(screen, data, h)
