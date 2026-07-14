@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-13.11"
+local VERSION = "2026-07-14.1"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -1916,7 +1916,7 @@ local function renderStorage(screen, data, h)
     local amountText = fmt(row.amount)
     local cellState = row.cellState
     local marker = cellState == "inf" and "INF" or (cellState == "bulk" and "BULK" or "BULK+")
-    local rowBg = cellState == "inf" and colors.purple or (cellState == "bulk" and colors.green or ((i % 2 == 0) and colors.gray or colors.black))
+    local rowBg = cellState == "inf" and colors.green or (cellState == "bulk" and colors.purple or ((i % 2 == 0) and colors.gray or colors.black))
     local markerColor = cellState and colors.white or colors.lightGray
     clearLine(y, rowBg)
     local amountCell = string.rep(" ", math.max(0, amountW - #amountText)) .. amountText
