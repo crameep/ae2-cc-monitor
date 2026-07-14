@@ -623,8 +623,21 @@ local ok, fatalError = xpcall(runDump, function(err)
 end)
 
 if not ok and not outputStopped then
-  section("FATAL ERROR")
-  line(fatalError)
+  if handle then handle.close(); handle = nil end
+  if fs.exists(OUTPUT_FILE) then fs.delete(OUTPUT_FILE) end
+  handle = fs.open(OUTPUT_FILE, "w")
+  bytesWritten = 0
+  outputStopped = false
+  if handle then
+    writeRaw("{\n")
+    writeRaw("  \"schema\": \"ae2-cc-monitor.exploratory-dump-error.v1\",\n")
+    writeRaw("  \"ok\": false,\n")
+    writeRaw("  \"error\": \"" .. jsonEscape(fatalError) .. "\",\n")
+    writeRaw("  \"outputFile\": \"" .. jsonEscape(OUTPUT_FILE) .. "\",\n")
+    writeRaw("  \"computerId\": \"" .. jsonEscape(os.getComputerID and os.getComputerID() or "unknown") .. "\",\n")
+    writeRaw("  \"craftOs\": \"" .. jsonEscape(os.version and os.version() or "unknown") .. "\"\n")
+    writeRaw("}\n")
+  end
 end
 
 if handle then handle.close() end
