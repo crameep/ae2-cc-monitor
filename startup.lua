@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.8"
+local VERSION = "2026-07-14.9"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/23faa7e/ae2-dump.lua"
@@ -1281,6 +1281,47 @@ local function updateUsage(items)
   return warnings, recent, movers
 end
 
+local function updateFluidMovers(fluids)
+  local now = nowSeconds()
+  usageState.lastFluids = usageState.lastFluids or {}
+  if usageState.lastFluidSample and now - usageState.lastFluidSample < SAMPLE_SECONDS then
+    return usageState.fluidMovers or {}
+  end
+
+  local current = {}
+  local movers = {}
+  local elapsed = math.max(1, now - n(usageState.lastFluidSample))
+  for _, fluid in pairs(fluids or {}) do
+    local key = "fluid:" .. itemKey(fluid)
+    local amount = amountOf(fluid)
+    if amount > 0 then
+      current[key] = amount
+      local prior = usageState.lastFluids[key]
+      if prior and amount ~= prior then
+        local delta = amount - prior
+        movers[#movers + 1] = {
+          key = key,
+          name = itemLabel(fluid),
+          delta = delta,
+          amount = amount,
+          perMinute = delta / elapsed * 60,
+          perHour = delta / elapsed * 3600,
+          score = math.abs(delta / elapsed)
+        }
+      end
+    end
+  end
+  table.sort(movers, function(a, b)
+    if a.score ~= b.score then return a.score > b.score end
+    return a.name < b.name
+  end)
+  usageState.lastFluids = current
+  usageState.lastFluidSample = now
+  usageState.fluidMovers = movers
+  saveState(usageState)
+  return movers
+end
+
 local function duration(seconds)
   seconds = math.max(0, math.floor(n(seconds) + 0.5))
   if seconds >= 3600 then
@@ -1958,7 +1999,10 @@ local function renderStock(screen, data, h)
   local headerY = y
   local columnY = y + 1
   local firstRowY = y + 2
-  local rowsAvailable = math.max(1, bottom - firstRowY + 1)
+  local totalRowsAvailable = math.max(1, bottom - firstRowY + 1)
+  local fluidRows = #data.topFluids > 0 and math.min(4, math.max(1, math.floor(totalRowsAvailable / 3))) or 0
+  local fluidSectionRows = fluidRows > 0 and (fluidRows + 2) or 0
+  local rowsAvailable = math.max(1, totalRowsAvailable - fluidSectionRows)
   local pageCount = math.max(1, math.ceil(#data.lowStock / rowsAvailable))
   listPages[screen] = listPages[screen] or {}
   local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen].stock or 1)))
@@ -1984,7 +2028,6 @@ local function renderStock(screen, data, h)
 
   if #data.lowStock == 0 then
     writeAt(2, firstRowY, "No watched ATM10 bottlenecks are low", colors.lightGray, colors.black, w - 2)
-    return
   end
 
   local startIndex = ((pageNumber - 1) * rowsAvailable) + 1
@@ -2004,6 +2047,24 @@ local function renderStock(screen, data, h)
     registerButton(screen, {x = ignoreX, x2 = w, y = rowY, action = "ignore", key = row.key, name = row.name})
     rowY = rowY + 1
   end
+
+  if fluidRows > 0 and rowY + 1 <= bottom then
+    rowY = rowY + 1
+    clearLine(rowY, colors.cyan)
+    writeAt(2, rowY, "FLUID STOCK", colors.black, colors.cyan, w - 2)
+    rowY = rowY + 1
+    for i = 1, math.min(fluidRows, #data.topFluids) do
+      if rowY > bottom then break end
+      local fluid = data.topFluids[i]
+      local amountText = fmt(fluid.amount)
+      local amountW = math.min(14, math.max(10, #amountText))
+      local bg = (i % 2 == 0) and colors.gray or colors.black
+      clearLine(rowY, bg)
+      writeAt(2, rowY, fluid.name, colors.cyan, bg, math.max(8, w - amountW - 3))
+      writeAt(math.max(1, w - amountW + 1), rowY, amountText, colors.white, bg, amountW)
+      rowY = rowY + 1
+    end
+  end
 end
 
 local function renderStorage(screen, data, h)
@@ -2012,7 +2073,10 @@ local function renderStorage(screen, data, h)
   local bottom = h - 3
   local y = 3
   local headerRows = 2
-  local rowsAvailable = math.max(1, bottom - (y + headerRows) + 1)
+  local totalRowsAvailable = math.max(1, bottom - (y + headerRows) + 1)
+  local fluidRows = #data.topFluids > 0 and math.min(5, math.max(1, math.floor(totalRowsAvailable / 3))) or 0
+  local fluidSectionRows = fluidRows > 0 and (fluidRows + 2) or 0
+  local rowsAvailable = math.max(1, totalRowsAvailable - fluidSectionRows)
   local pageCount = math.max(1, math.ceil(#data.top / rowsAvailable))
   listPages[screen] = listPages[screen] or {}
   local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen].storage or 1)))
@@ -2057,6 +2121,24 @@ local function renderStorage(screen, data, h)
     writeAt(amountX, y, amountCell, colors.white, rowBg, amountW)
     y = y + 1
   end
+
+  if fluidRows > 0 and y + 1 <= bottom then
+    y = y + 1
+    clearLine(y, colors.cyan)
+    writeAt(2, y, "FLUID STORAGE", colors.black, colors.cyan, w - 2)
+    y = y + 1
+    for i = 1, math.min(fluidRows, #data.topFluids) do
+      if y > bottom then break end
+      local fluid = data.topFluids[i]
+      local amountText = fmt(fluid.amount)
+      local amountW2 = math.min(14, math.max(10, #amountText))
+      local bg = (i % 2 == 0) and colors.gray or colors.black
+      clearLine(y, bg)
+      writeAt(2, y, fluid.name, colors.cyan, bg, math.max(8, w - amountW2 - 3))
+      writeAt(math.max(1, w - amountW2 + 1), y, amountText, colors.white, bg, amountW2)
+      y = y + 1
+    end
+  end
 end
 
 local function renderMovers(screen, data, h)
@@ -2064,7 +2146,10 @@ local function renderMovers(screen, data, h)
   local navY = h - 2
   local bottom = h - 3
   local y = 3
-  local rowsAvailable = math.max(1, bottom - (y + 2) + 1)
+  local totalRowsAvailable = math.max(1, bottom - (y + 2) + 1)
+  local fluidRows = #data.fluidMovers > 0 and math.min(4, math.max(1, math.floor(totalRowsAvailable / 3))) or 0
+  local fluidSectionRows = fluidRows > 0 and (fluidRows + 2) or 0
+  local rowsAvailable = math.max(1, totalRowsAvailable - fluidSectionRows)
   local pageCount = math.max(1, math.ceil(#data.movers / rowsAvailable))
   listPages[screen] = listPages[screen] or {}
   local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen].movers or 1)))
@@ -2072,6 +2157,7 @@ local function renderMovers(screen, data, h)
 
   clearLine(y, colors.black)
   local summary = #data.movers .. " changing item type" .. (#data.movers == 1 and "" or "s")
+    .. "  |  " .. #data.fluidMovers .. " changing fluid" .. (#data.fluidMovers == 1 and "" or "s")
   writeAt(2, y, summary .. "  |  sampled every " .. SAMPLE_SECONDS .. "s", colors.lightGray, colors.black, w - 2)
   bottomPageControls(screen, "movers", navY, pageNumber, pageCount)
   y = y + 1
@@ -2095,8 +2181,8 @@ local function renderMovers(screen, data, h)
   y = y + 1
 
   if #data.movers == 0 then
-    centerText(math.min(bottom, y + 3), "No item movement in the current sample window", colors.lightGray, colors.black, w)
-    return
+    writeAt(2, y, "No item movement in the current sample window", colors.lightGray, colors.black, w - 2)
+    y = y + 1
   end
 
   local startIndex = ((pageNumber - 1) * rowsAvailable) + 1
@@ -2116,6 +2202,27 @@ local function renderMovers(screen, data, h)
     writeAt(math.max(hourX, hourX + hourW - #hourText), y, hourText, movementColor, bg, hourW)
     if nowX then writeAt(math.max(nowX, nowX + nowW - #nowText), y, nowText, colors.lightGray, bg, nowW) end
     y = y + 1
+  end
+
+  if fluidRows > 0 and y + 1 <= bottom then
+    y = y + 1
+    clearLine(y, colors.cyan)
+    writeAt(2, y, "FLUID MOVEMENT", colors.black, colors.cyan, w - 2)
+    y = y + 1
+    for i = 1, math.min(fluidRows, #data.fluidMovers) do
+      if y > bottom then break end
+      local row = data.fluidMovers[i]
+      local bg = (i % 2 == 0) and colors.gray or colors.black
+      local movementColor = n(row.delta) < 0 and colors.orange or colors.lime
+      local deltaText = signedFmt(row.delta)
+      local minText = rateFmt(row.perMinute, "/m")
+      local nowText = fmt(row.amount)
+      local rightText = deltaText .. "  " .. minText .. "  now " .. nowText
+      clearLine(y, bg)
+      writeAt(2, y, row.name, colors.cyan, bg, math.max(8, w - #rightText - 3))
+      writeAt(math.max(1, w - #rightText + 1), y, rightText, movementColor, bg, #rightText)
+      y = y + 1
+    end
   end
 end
 
@@ -2450,6 +2557,7 @@ local function collectDashboardData()
     d.fluidAmount = d.fluidAmount + amountOf(fluid)
   end
   d.topFluids = topFluids(d.fluids, 12)
+  d.fluidMovers = updateFluidMovers(d.fluids)
 
   d.itemUsed = call("getUsedItemStorage", d.itemCount)
   d.itemTotal = call("getTotalItemStorage", 0)
