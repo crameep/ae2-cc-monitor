@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.4"
+local VERSION = "2026-07-14.5"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -2297,171 +2297,128 @@ local function updatePowerStats(fluxInfo)
   return powerStats
 end
 
-local function mainLoop()
-while true do
-  local items = callAnyArg({"listItems", "getItems"}, {}, {}) or {}
-  local fluids = callAnyArg({"listFluid", "listFluids", "getFluids"}, {}, {}) or {}
-  local chemicals = callAnyArg({"listChemicals", "getChemicals"}, {}, {}) or {}
-  local fluxProbeRows = collectFluxProbeRows()
-  local cells = callAny({"listCells", "getCells"}, {}) or {}
-  local drives = call("getDrives", {}) or {}
-  local rawCpus = callAny({"getCraftingCPUs", "listCraftingCPUs"}, {}) or {}
-  local cpus = normalizeCpus(rawCpus)
-  local rawTasks = callAny({"getCraftingTasks", "listCraftingTasks"}, {}) or {}
-  local tasks = normalizeTasks(rawTasks, cpus)
-  local patterns = getPatternCache()
-  enrichTasks(tasks, items, patterns)
+local function collectDashboardData()
+  local d = {}
+  d.items = callAnyArg({"listItems", "getItems"}, {}, {}) or {}
+  d.fluids = callAnyArg({"listFluid", "listFluids", "getFluids"}, {}, {}) or {}
+  d.chemicals = callAnyArg({"listChemicals", "getChemicals"}, {}, {}) or {}
+  d.fluxProbeRows = collectFluxProbeRows()
+  d.cells = callAny({"listCells", "getCells"}, {}) or {}
+  d.drives = call("getDrives", {}) or {}
+  d.cpus = normalizeCpus(callAny({"getCraftingCPUs", "listCraftingCPUs"}, {}) or {})
+  d.tasks = normalizeTasks(callAny({"getCraftingTasks", "listCraftingTasks"}, {}) or {}, d.cpus)
+  d.patterns = getPatternCache()
+  enrichTasks(d.tasks, d.items, d.patterns)
 
-  local itemTypes, itemCount = 0, 0
-  local bulkIndex, bulkStats = buildBulkIndex(cells, items)
-  local top = {}
-  local lowStock = {}
-  for _, item in pairs(items) do
+  d.itemTypes = 0
+  d.itemCount = 0
+  d.top = {}
+  d.lowStock = {}
+  d.bulkIndex, d.bulkStats = buildBulkIndex(d.cells, d.items)
+  for _, item in pairs(d.items) do
     local amount = amountOf(item)
     if amount > 0 then
-      itemTypes = itemTypes + 1
-      itemCount = itemCount + amount
+      d.itemTypes = d.itemTypes + 1
+      d.itemCount = d.itemCount + amount
       local label = itemLabel(item)
       local key = itemKey(item)
       if shouldWatchItem(key, label) then
-        top[#top + 1] = {key = key, name = label, amount = amount, cellState = bulkIndex[key]}
+        d.top[#d.top + 1] = {key = key, name = label, amount = amount, cellState = d.bulkIndex[key]}
       end
       local stockRule = not usageState.ignored[key] and atm10StockRule(key, label, amount)
       if stockRule then
-        lowStock[#lowStock + 1] = {key = key, name = label, amount = amount, target = stockRule.max, ratio = amount / math.max(1, stockRule.max), priority = stockRule.priority, group = stockRule.short or stockRule.label}
+        d.lowStock[#d.lowStock + 1] = {key = key, name = label, amount = amount, target = stockRule.max, ratio = amount / math.max(1, stockRule.max), priority = stockRule.priority, group = stockRule.short or stockRule.label}
       end
     end
   end
-  table.sort(top, function(a, b) return a.amount > b.amount end)
-  table.sort(lowStock, function(a, b)
+  table.sort(d.top, function(a, b) return a.amount > b.amount end)
+  table.sort(d.lowStock, function(a, b)
     if a.priority ~= b.priority then return a.priority > b.priority end
     if a.ratio ~= b.ratio then return a.ratio < b.ratio end
     return a.name < b.name
   end)
-  local warnings, recent, movers = updateUsage(items)
+  d.warnings, d.recent, d.movers = updateUsage(d.items)
 
-  local fluidTypes, fluidAmount = 0, 0
-  for _, fluid in pairs(fluids) do
-    fluidTypes = fluidTypes + 1
-    fluidAmount = fluidAmount + amountOf(fluid)
+  d.fluidTypes = 0
+  d.fluidAmount = 0
+  for _, fluid in pairs(d.fluids) do
+    d.fluidTypes = d.fluidTypes + 1
+    d.fluidAmount = d.fluidAmount + amountOf(fluid)
   end
 
-  local itemUsed = call("getUsedItemStorage", itemCount)
-  local itemTotal = call("getTotalItemStorage", 0)
-  local fluidUsed = call("getUsedFluidStorage", fluidAmount)
-  local fluidTotal = call("getTotalFluidStorage", 0)
-  local energy = callAny({"getEnergyStorage", "getStoredEnergy"}, 0)
-  local energyCap = callAny({"getMaxEnergyStorage", "getEnergyCapacity"}, 0)
-  local usage = call("getEnergyUsage", 0)
-  local input = callAny({"getAverageEnergyInput", "getAvgPowerInjection"}, 0)
-  local fluxInfo = detectFluxEnergy(items, fluids, chemicals, fluxProbeRows, cells, energy, energyCap)
-  local currentPowerStats = updatePowerStats(fluxInfo)
-  local itemTypeTotal, fluidTypeTotal, itemCellCount, fluidCellCount = typeSlots(cells)
-  local itemPct = pct(itemUsed, itemTotal)
-  local typePct = pct(itemTypes, itemTypeTotal)
-  local fluidPct = pct(fluidUsed, fluidTotal)
-  local fluidTypePct = pct(fluidTypes, fluidTypeTotal)
-  local powerPct = pct(energy, energyCap)
-  local fePct = fluxInfo.known and pct(fluxInfo.stored, fluxInfo.capacity) or 0
-  local powerNet = input - usage
-  local powerBufferSeconds = powerNet < 0 and energy / math.max(1, (-powerNet) * 20) or 0
-  local nearFullCellCount, emptyCellCount = cellHealth(cells)
-  local driveCount = countTable(drives)
-  local driveDataAvailable = driveCount > 0 or countTable(cells) == 0
+  d.itemUsed = call("getUsedItemStorage", d.itemCount)
+  d.itemTotal = call("getTotalItemStorage", 0)
+  d.fluidUsed = call("getUsedFluidStorage", d.fluidAmount)
+  d.fluidTotal = call("getTotalFluidStorage", 0)
+  d.energy = callAny({"getEnergyStorage", "getStoredEnergy"}, 0)
+  d.energyCap = callAny({"getMaxEnergyStorage", "getEnergyCapacity"}, 0)
+  d.usage = call("getEnergyUsage", 0)
+  d.input = callAny({"getAverageEnergyInput", "getAvgPowerInjection"}, 0)
 
-  local busyCpuCount = 0
-  for _, cpu in pairs(cpus) do
-    if cpuBusy(cpu) then busyCpuCount = busyCpuCount + 1 end
+  d.fluxInfo = detectFluxEnergy(d.items, d.fluids, d.chemicals, d.fluxProbeRows, d.cells, d.energy, d.energyCap)
+  d.powerStats = updatePowerStats(d.fluxInfo)
+  d.itemTypeTotal, d.fluidTypeTotal, d.itemCellCount, d.fluidCellCount = typeSlots(d.cells)
+  d.itemPct = pct(d.itemUsed, d.itemTotal)
+  d.typePct = pct(d.itemTypes, d.itemTypeTotal)
+  d.fluidPct = pct(d.fluidUsed, d.fluidTotal)
+  d.fluidTypePct = pct(d.fluidTypes, d.fluidTypeTotal)
+  d.powerPct = pct(d.energy, d.energyCap)
+  d.fePct = d.fluxInfo.known and pct(d.fluxInfo.stored, d.fluxInfo.capacity) or 0
+  d.powerNet = d.input - d.usage
+  d.powerBufferSeconds = d.powerNet < 0 and d.energy / math.max(1, (-d.powerNet) * 20) or 0
+  d.nearFullCellCount, d.emptyCellCount = cellHealth(d.cells)
+  d.driveCount = countTable(d.drives)
+  d.driveDataAvailable = d.driveCount > 0 or countTable(d.cells) == 0
+
+  d.busyCpuCount = 0
+  for _, cpu in pairs(d.cpus) do
+    if cpuBusy(cpu) then d.busyCpuCount = d.busyCpuCount + 1 end
   end
 
-  local health = "SYSTEM OK"
-  local healthColor = colors.green
-  local healthDetail = "storage, power, and stock stable"
-  if itemPct >= 90 then
-    health, healthColor, healthDetail = "ITEM STORAGE FULL", colors.red, "add item storage"
-  elseif typePct >= 85 then
-    health, healthColor, healthDetail = "TYPE SLOTS FULL", colors.red, "add type capacity"
-  elseif fluxInfo.known and fluxInfo.capacity > 0 and fePct < 20 then
-    health, healthColor, healthDetail = "LOW FE", colors.red, "FE cells " .. math.floor(fePct + 0.5) .. "%"
-  elseif currentPowerStats.trendReady and currentPowerStats.etaMode == "empty" and currentPowerStats.eta > 0 and currentPowerStats.eta < 1800 then
-    health, healthColor, healthDetail = "FE DRAIN", colors.orange, "empty in " .. duration(currentPowerStats.eta)
-  elseif fluidPct >= 90 then
-    health, healthColor, healthDetail = "FLUID STORAGE FULL", colors.orange, "add fluid storage"
-  elseif fluidTypePct >= 85 then
-    health, healthColor, healthDetail = "FLUID TYPES FULL", colors.orange, "add fluid type capacity"
-  elseif #warnings > 0 then
-    health, healthColor, healthDetail = "MATERIAL DROP", colors.red, warnings[1].name
-  elseif #recent > 0 then
-    health, healthColor, healthDetail = "MATERIAL MOVING", colors.orange, recent[1].name
-  elseif #tasks > 0 or busyCpuCount > 0 then
-    local detail = #tasks > 0 and (tostring(#tasks) .. " active job(s)") or (tostring(busyCpuCount) .. " CPU(s) busy; details unavailable")
-    health, healthColor, healthDetail = "CRAFTING", colors.cyan, detail
+  d.health = "SYSTEM OK"
+  d.healthColor = colors.green
+  d.healthDetail = "storage, power, and stock stable"
+  if d.itemPct >= 90 then
+    d.health, d.healthColor, d.healthDetail = "ITEM STORAGE FULL", colors.red, "add item storage"
+  elseif d.typePct >= 85 then
+    d.health, d.healthColor, d.healthDetail = "TYPE SLOTS FULL", colors.red, "add type capacity"
+  elseif d.fluxInfo.known and d.fluxInfo.capacity > 0 and d.fePct < 20 then
+    d.health, d.healthColor, d.healthDetail = "LOW FE", colors.red, "FE cells " .. math.floor(d.fePct + 0.5) .. "%"
+  elseif d.powerStats.trendReady and d.powerStats.etaMode == "empty" and d.powerStats.eta > 0 and d.powerStats.eta < 1800 then
+    d.health, d.healthColor, d.healthDetail = "FE DRAIN", colors.orange, "empty in " .. duration(d.powerStats.eta)
+  elseif d.fluidPct >= 90 then
+    d.health, d.healthColor, d.healthDetail = "FLUID STORAGE FULL", colors.orange, "add fluid storage"
+  elseif d.fluidTypePct >= 85 then
+    d.health, d.healthColor, d.healthDetail = "FLUID TYPES FULL", colors.orange, "add fluid type capacity"
+  elseif #d.warnings > 0 then
+    d.health, d.healthColor, d.healthDetail = "MATERIAL DROP", colors.red, d.warnings[1].name
+  elseif #d.recent > 0 then
+    d.health, d.healthColor, d.healthDetail = "MATERIAL MOVING", colors.orange, d.recent[1].name
+  elseif #d.tasks > 0 or d.busyCpuCount > 0 then
+    d.health, d.healthColor, d.healthDetail = "CRAFTING", colors.cyan, #d.tasks > 0 and (tostring(#d.tasks) .. " active job(s)") or (tostring(d.busyCpuCount) .. " CPU(s) busy; details unavailable")
   end
 
-  local online = callAny({"isOnline", "isConnected"}, true)
-  local data = {
-    items = items,
-    fluids = fluids,
-    chemicals = chemicals,
-    fluxProbeRows = fluxProbeRows,
-    cells = cells,
-    drives = drives,
-    cellCount = countTable(cells),
-    driveCount = driveCount,
-    driveDataAvailable = driveDataAvailable,
-    patternCount = countTable(patterns),
-    cpus = cpus,
-    tasks = tasks,
-    warnings = warnings,
-    recent = recent,
-    movers = movers,
-    lowStock = lowStock,
-    top = top,
-    itemTypes = itemTypes,
-    itemCount = itemCount,
-    fluidTypes = fluidTypes,
-    fluidAmount = fluidAmount,
-    itemUsed = itemUsed,
-    itemTotal = itemTotal,
-    fluidUsed = fluidUsed,
-    fluidTotal = fluidTotal,
-    energy = energy,
-    energyCap = energyCap,
-    feKnown = fluxInfo.known,
-    feEstimated = fluxInfo.estimated == true,
-    feStored = fluxInfo.stored or 0,
-    feCapacity = fluxInfo.capacity or 0,
-    fePct = fePct,
-    feSource = fluxInfo.source,
-    feCellCount = fluxInfo.cellCount or 0,
-    feProbeCount = fluxInfo.probeCount or 0,
-    usage = usage,
-    input = input,
-    powerStats = currentPowerStats,
-    powerNet = powerNet,
-    powerBufferSeconds = powerBufferSeconds,
-    itemTypeTotal = itemTypeTotal,
-    fluidTypeTotal = fluidTypeTotal,
-    itemCellCount = itemCellCount,
-    fluidCellCount = fluidCellCount,
-    itemPct = itemPct,
-    typePct = typePct,
-    fluidPct = fluidPct,
-    fluidTypePct = fluidTypePct,
-    powerPct = powerPct,
-    bulkCellCount = bulkStats.bulkCellCount,
-    bulkItemMatches = bulkStats.bulkItemMatches,
-    bulkAutoAvailable = bulkStats.bulkAutoAvailable,
-    manualBulkCount = bulkStats.manualBulkCount,
-    manualInfCount = bulkStats.manualInfCount,
-    nearFullCellCount = nearFullCellCount,
-    emptyCellCount = emptyCellCount,
-    busyCpuCount = busyCpuCount,
-    health = health,
-    healthColor = healthColor,
-    healthDetail = healthDetail,
-    online = online
-  }
+  d.cellCount = countTable(d.cells)
+  d.patternCount = countTable(d.patterns)
+  d.feKnown = d.fluxInfo.known
+  d.feEstimated = d.fluxInfo.estimated == true
+  d.feStored = d.fluxInfo.stored or 0
+  d.feCapacity = d.fluxInfo.capacity or 0
+  d.feSource = d.fluxInfo.source
+  d.feCellCount = d.fluxInfo.cellCount or 0
+  d.feProbeCount = d.fluxInfo.probeCount or 0
+  d.bulkCellCount = d.bulkStats.bulkCellCount
+  d.bulkItemMatches = d.bulkStats.bulkItemMatches
+  d.bulkAutoAvailable = d.bulkStats.bulkAutoAvailable
+  d.manualBulkCount = d.bulkStats.manualBulkCount
+  d.manualInfCount = d.bulkStats.manualInfCount
+  d.online = callAny({"isOnline", "isConnected"}, true)
+  return d
+end
+
+local function mainLoop()
+while true do
+  local data = collectDashboardData()
 
   for _, target in ipairs(monitorTargets) do
     renderScreen(target, data)
