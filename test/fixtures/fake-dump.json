@@ -1,0 +1,61 @@
+{
+  "schema": "ae2-cc-monitor.exploratory-dump.v1",
+  "bridges": [
+    {
+      "name": "me_bridge_0",
+      "targetedProbes": [
+        {
+          "method": "getStoredEnergy",
+          "args": [],
+          "result": {"ok": true, "returned": {"values": [35064868.9]}}
+        },
+        {
+          "method": "getEnergyCapacity",
+          "args": [],
+          "result": {"ok": true, "returned": {"values": [35231325]}}
+        },
+        {
+          "method": "getEnergyUsage",
+          "args": [],
+          "result": {"ok": true, "returned": {"values": [1866.2]}}
+        },
+        {
+          "method": "getAverageEnergyInput",
+          "args": [],
+          "result": {"ok": true, "returned": {"values": [1865.7]}}
+        },
+        {
+          "method": "getFluids",
+          "args": [],
+          "result": {
+            "ok": true,
+            "returned": {
+              "values": [
+                [
+                  {"name": "minecraft:water", "displayName": "Water", "count": 2147903371009},
+                  {"name": "minecraft:lava", "displayName": "Lava", "count": 2147483647000},
+                  {"name": "productivebees:honey", "displayName": "Honey", "count": 4073390585}
+                ]
+              ]
+            }
+          }
+        },
+        {
+          "method": "getCells",
+          "args": [],
+          "result": {
+            "ok": true,
+            "returned": {
+              "values": [
+                [
+                  {"type": "ae2:i", "item": {"name": "megacells:item_storage_cell_256m"}, "bytes": 268435456, "usedBytes": 132235172},
+                  {"type": "ae2:f", "item": {"name": "megacells:fluid_storage_cell_256m"}, "bytes": 268435456, "usedBytes": 19076715}
+                ]
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

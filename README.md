@@ -16,17 +16,17 @@ reboot
 
 The bottom row is a persistent touch navigation bar:
 
-- **Overview** — health, storage, Applied Flux FE cell stored/trend when exposed, active crafting, and the most important alert.
+- **Overview** — health, storage, AE energy buffer/trend, active crafting, and the most important alert.
 - **Crafting** — active AE2 crafting jobs, progress, crafted quantity, sampled rate, ETA, CPU, bytes, and subpart information when Advanced Peripherals exposes it.
-- **Stock** — confirmed material drops, recent use, ATM10 bottleneck warnings, and `IGN` controls.
-- **Storage** — paged largest-item list and manual/automatic infinity/bulk-cell markers.
-- **Movers** — recent item deltas sorted by movement rate, with per-minute and per-hour estimates.
-- **System** — grid status, cells, drives, Applied Flux FE cell storage/trend, AE buffer/bridge power flow, crafting CPUs, version, and updater.
+- **Stock** — item/fluid tabs, confirmed material drops, recent use, ATM10 bottleneck warnings, and `IGN` controls.
+- **Storage** — item/fluid tabs, paged largest-resource lists, and manual/automatic infinity/bulk-cell markers for items.
+- **Movers** — item/fluid movement tabs sorted by movement rate, with per-minute and per-hour estimates.
+- **System** — grid status, cells, drives, AE buffer/bridge power flow, crafting CPUs, version, and updater.
 - **Tools** — one-touch AE2 diagnostic generation and optional Pastebin upload, with the latest link shown on the monitor.
 
 Each attached monitor remembers its own selected page while the script is running.
 
-Applied Flux FE is read from the FE key when Advanced Peripherals exposes it. If not, the monitor estimates stored FE from FE-cell used bytes at the configured default of 1,048,576 FE per byte and marks the value with `~`.
+Applied Flux FE is still probed, but current tested Advanced Peripherals/AppFlux data does not expose `appflux:fe` as an item, fluid, chemical, or measurable energy buffer. The dashboard treats AE network energy as the reliable energy metric and only reports FE if the API actually exposes it.
 
 ## Crafting Detection
 
@@ -57,11 +57,11 @@ The script starts at monitor text scale `1` and falls back to `0.5` when a displ
 
 ## Update
 
-Open **System** and tap `UPDATE`. The script downloads the latest `startup.lua` from this repository and reboots.
+Open **System** and tap `UPDATE`. The script resolves the latest GitHub commit, reads `version.json`, downloads `startup.lua` from that exact commit, and reboots. This avoids stale `raw.githubusercontent.com/main` cache results.
 
 ## Tools and diagnostic upload
 
-Open **Tools** and tap `CREATE + UPLOAD AE2 DUMP`. The dashboard downloads the latest `ae2-dump.lua`, collects a one-shot read-only snapshot, saves `ae2-dump.txt`, uploads it to Pastebin when `.ae2_pastebin_key` exists, and displays the resulting URL and paste code. The last successful URL is saved in `.ae2_last_paste`.
+Open **Tools** and tap `CREATE + UPLOAD AE2 DUMP`. The dashboard downloads `ae2-dump.lua`, collects a one-shot read-only JSON snapshot, saves `ae2-dump.json`, uploads it to Pastebin when possible, and displays the resulting URL and paste code. The last successful URL is saved in `.ae2_last_paste`.
 
 Manual update:
 
@@ -127,3 +127,16 @@ Some Advanced Peripherals builds expose terminal-started jobs only through a cra
 The Crafting page also uses `getPatterns()` to show the immediate recipe inputs for the active output. Stock estimates can under-count outputs that are consumed immediately by parent recipes, or over-count items imported from elsewhere.
 
 When `getDrives()` returns no location data, the System page reports drive data as unavailable and shows the exposed pattern count instead. Automatic infinity/bulk-item association is disabled when cell objects do not expose their configured contents; manual cell markers continue to work.
+
+## Local Checks
+
+Run these from the repository before pushing monitor changes:
+
+```sh
+node tools/build-startup.js
+npx --yes luaparse startup.lua >/tmp/ae2-startup-luaparse.json
+npx --yes luaparse ae2-dump.lua >/tmp/ae2-dump-luaparse.json
+node tools/smoke-dump.js
+```
+
+`startup.lua` is the deployed ComputerCraft file. Source is split under `src/*.lua`; run `node tools/build-startup.js` after editing those chunks.

@@ -27,13 +27,13 @@ ae2-dump
 The output is saved as:
 
 ```text
-ae2-dump.txt
+ae2-dump.json
 ```
 
 Upload it with ComputerCraft's built-in Pastebin program:
 
 ```lua
-pastebin put ae2-dump.txt
+pastebin put ae2-dump.json
 ```
 
 Or generate and upload in one command:
@@ -42,7 +42,7 @@ Or generate and upload in one command:
 ae2-dump upload
 ```
 
-Paste the resulting Pastebin code or URL into the chat. If the dump is too large for Pastebin, upload `ae2-dump.txt` directly as a file.
+Paste the resulting Pastebin code or URL into the chat. If the dump is too large for Pastebin, upload `ae2-dump.json` directly as a file.
 
 Afterward, restart the dashboard:
 

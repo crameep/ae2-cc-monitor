@@ -25,9 +25,12 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.11"
+local VERSION = "2026-07-14.12"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
+local GITHUB_COMMIT_API = "https://api.github.com/repos/crameep/ae2-cc-monitor/commits/main"
+local RAW_BASE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor"
+local MANIFEST_FILE = "version.json"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/23faa7e/ae2-dump.lua"
 local DUMP_SCRIPT = "ae2-dump.lua"
 local DUMP_FILE = "ae2-dump.json"
@@ -591,6 +594,31 @@ local function summarizeCells(cells)
   return groups
 end
 
+local function listCells(cells)
+  local rows = {}
+  for index, cell in pairs(cells or {}) do
+    if type(cell) == "table" then
+      local total = n(cell.bytes or cell.totalBytes or cell.capacity or cell.total)
+      local used = n(cell.usedBytes or cell.bytesUsed or cell.used)
+      rows[#rows + 1] = {
+        name = cleanLabel(cellName(cell)),
+        type = tostring(cell.type or "?"),
+        used = used,
+        total = total,
+        pct = pct(used, total),
+        index = index
+      }
+    end
+  end
+  table.sort(rows, function(a, b)
+    if a.type ~= b.type then return a.type < b.type end
+    if a.total ~= b.total then return a.total > b.total end
+    if a.used ~= b.used then return a.used > b.used end
+    return a.name < b.name
+  end)
+  return rows
+end
+
 local function topFluids(fluids, limit)
   local rows = {}
   for _, fluid in pairs(fluids or {}) do
@@ -914,15 +942,48 @@ local function runUpdater()
     return true
   end
 
-  setStatus("Updating from GitHub...")
-  local url = UPDATE_URL .. "?v=" .. tostring(os.epoch and os.epoch("utc") or os.time())
-  local res = http.get(url)
-  if not res then
+  local function readUrl(url)
+    local headers = {["User-Agent"] = "ae2-cc-monitor"}
+    local res = http.get(url, headers)
+    if not res then res = http.get(url) end
+    if not res then return nil end
+    local body = res.readAll()
+    res.close()
+    return body
+  end
+
+  local function latestCommitSha()
+    local body = readUrl(GITHUB_COMMIT_API .. "?v=" .. tostring(os.epoch and os.epoch("utc") or os.time()))
+    if not body then return nil end
+    return string.match(body, '"sha"%s*:%s*"([0-9a-f]+)"')
+  end
+
+  local function manifestFor(ref)
+    local url = RAW_BASE_URL .. "/" .. ref .. "/" .. MANIFEST_FILE .. "?v=" .. tostring(os.epoch and os.epoch("utc") or os.time())
+    local body = readUrl(url)
+    if not body then return nil end
+    local startupPath = string.match(body, '"startup"%s*:%s*"([^"]+)"') or "startup.lua"
+    local version = string.match(body, '"version"%s*:%s*"([^"]+)"') or ref
+    return {version = version, startupPath = startupPath}
+  end
+
+  setStatus("Resolving latest version...")
+  local ref = latestCommitSha()
+  local manifest = ref and manifestFor(ref) or nil
+  local url
+  if ref and manifest then
+    url = RAW_BASE_URL .. "/" .. ref .. "/" .. manifest.startupPath
+    setStatus("Updating to " .. manifest.version .. "...")
+  else
+    url = UPDATE_URL .. "?v=" .. tostring(os.epoch and os.epoch("utc") or os.time())
+    setStatus("Manifest failed; using raw main...")
+  end
+
+  local body = readUrl(url)
+  if not body then
     setStatus("Update failed")
     return true
   end
-  local body = res.readAll()
-  res.close()
   if not body or #body < 1000 or not string.find(body, "AE2 Visual Monitor", 1, true) then
     setStatus("Bad update file")
     return true
@@ -1800,7 +1861,7 @@ local function drawSubtabs(screen, page, active, tabs, y)
     local x2 = i == tabCount and w or math.min(w, x + tabW - 1)
     local width = math.max(1, x2 - x + 1)
     local selected = tab.key == active
-    local bg = selected and colors.cyan or colors.gray
+    local bg = selected and colors.lime or colors.gray
     local fg = selected and colors.black or colors.white
     fillRect(x, y, width, 1, bg)
     local label = tab.label
@@ -2276,6 +2337,44 @@ local function renderSystem(screen, data, h)
   registerButton(screen, {x = updateX, x2 = w, y = y, action = "update"})
   y = y + 2
 
+  local activeTab = getSectionTab(screen, "system", "summary")
+  y = drawSubtabs(screen, "system", activeTab, {
+    {key = "summary", label = "SUMMARY"},
+    {key = "cells", label = "CELLS"}
+  }, y)
+  y = y + 1
+
+  if activeTab == "cells" then
+    local rowsAvailable = math.max(1, bottom - (y + 1) + 1)
+    local pageCount = math.max(1, math.ceil(#data.cellRows / rowsAvailable))
+    listPages[screen] = listPages[screen] or {}
+    local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen].systemCells or 1)))
+    listPages[screen].systemCells = pageNumber
+    bottomPageControls(screen, "systemCells", footerY - 2, pageNumber, pageCount)
+    clearLine(y, colors.lightGray)
+    writeAt(2, y, "CELL", colors.black, colors.lightGray, math.max(8, w - 18))
+    writeAt(math.max(1, w - 16), y, "USED", colors.black, colors.lightGray, 16)
+    y = y + 1
+    if #data.cellRows == 0 then
+      writeAt(2, y, "No storage cell data exposed", colors.lightGray, colors.black, w - 2)
+    else
+      local startIndex = ((pageNumber - 1) * rowsAvailable) + 1
+      for i = startIndex, math.min(#data.cellRows, startIndex + rowsAvailable - 1) do
+        if y > bottom then break end
+        local row = data.cellRows[i]
+        local bg = (i % 2 == 0) and colors.gray or colors.black
+        local usedText = fmt(row.used) .. "/" .. fmt(row.total) .. " " .. math.floor(row.pct + 0.5) .. "%"
+        clearLine(y, bg)
+        writeAt(2, y, row.name, row.type == "ae2:f" and colors.cyan or colors.white, bg, math.max(8, w - #usedText - 3))
+        writeAt(math.max(1, w - #usedText + 1), y, usedText, colors.lightGray, bg, #usedText)
+        y = y + 1
+      end
+    end
+    clearLine(footerY, colors.black)
+    writeAt(2, footerY, "v" .. VERSION .. "  |  refresh 3s  |  usage sample " .. SAMPLE_SECONDS .. "s", colors.lightGray, colors.black, w - 2)
+    return
+  end
+
   if w >= 42 and y + 2 <= bottom then
     local gap = 1
     local tileW = math.floor((w - (gap * 2)) / 3)
@@ -2310,12 +2409,6 @@ local function renderSystem(screen, data, h)
     if etaText and y <= bottom then
       writeAt(2, y, "Estimate", colors.lightGray, colors.black, 12)
       writeAt(15, y, etaText, colors.yellow, colors.black, w - 15)
-      y = y + 1
-    end
-    if y <= bottom then
-      writeAt(2, y, "AppFlux", colors.lightGray, colors.black, 12)
-      local fluxText = data.feKnown and (fmt(data.feStored) .. " FE exposed") or "FE storage not exposed"
-      writeAt(15, y, fluxText .. "  |  " .. data.feProbeCount .. " probe(s)", data.feKnown and colors.lightGray or colors.orange, colors.black, w - 15)
       y = y + 1
     end
     y = y + 1
@@ -2586,6 +2679,7 @@ local function collectDashboardData()
   d.powerStats = updatePowerStats(d.aeEnergyInfo)
   d.itemTypeTotal, d.fluidTypeTotal, d.itemCellCount, d.fluidCellCount = typeSlots(d.cells)
   d.cellGroups = summarizeCells(d.cells)
+  d.cellRows = listCells(d.cells)
   d.itemPct = pct(d.itemUsed, d.itemTotal)
   d.typePct = pct(d.itemTypes, d.itemTypeTotal)
   d.fluidPct = pct(d.fluidUsed, d.fluidTotal)
