@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.5"
+local VERSION = "2026-07-14.6"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -756,6 +756,7 @@ local diagnosticRequested = false
 local lastPasteUrl = nil
 local lastPasteError = nil
 local lastDumpSize = 0
+local lastDumpPreview = nil
 local powerStats = {trendReady = false, netPerSecond = 0, netPerTick = 0, netPerMinute = 0, eta = 0, etaMode = nil}
 
 if fs.exists(LAST_PASTE_FILE) then
@@ -885,11 +886,24 @@ local function downloadDumpScript()
   if not body or #body < 3000 or not string.find(body, "AE2 / Advanced Peripherals", 1, true) then
     return false, "Downloaded diagnostic was invalid"
   end
+  if fs.exists(DUMP_SCRIPT) then fs.delete(DUMP_SCRIPT) end
   local h = fs.open(DUMP_SCRIPT, "w")
   if not h then return false, "Cannot write " .. DUMP_SCRIPT end
   h.write(body)
   h.close()
   return true
+end
+
+local function readDumpPreview()
+  if not fs.exists(DUMP_FILE) or fs.isDir(DUMP_FILE) then return nil end
+  local h = fs.open(DUMP_FILE, "r")
+  if not h then return nil end
+  local body = h.readAll() or ""
+  h.close()
+  body = string.gsub(body, "\n", " ")
+  body = string.gsub(body, "%s+", " ")
+  if body == "" then return nil end
+  return string.sub(body, 1, 160)
 end
 
 local function loadPastebinKey()
@@ -999,6 +1013,7 @@ local function runDiagnosticUpload()
   end
   toolBusy = true
   lastPasteError = nil
+  lastDumpPreview = nil
   setStatus("Downloading diagnostic tool...")
 
   local ok, err = downloadDumpScript()
@@ -1019,6 +1034,7 @@ local function runDiagnosticUpload()
     return true
   end
   lastDumpSize = fs.getSize(DUMP_FILE) or 0
+  lastDumpPreview = readDumpPreview()
 
   setStatus("Uploading diagnostic to Pastebin...")
   local url, uploadError = uploadDumpToPastebin()
@@ -2206,6 +2222,10 @@ local function renderTools(screen, data, h)
     y = y + 1
     if y <= bottom and lastDumpSize > 0 then
       writeAt(2, y, "Saved " .. DUMP_FILE .. " (" .. fmt(lastDumpSize) .. " bytes)", colors.lightGray, colors.black, w - 2)
+      y = y + 1
+    end
+    if y <= bottom and lastDumpPreview then
+      writeAt(2, y, "Dump preview: " .. lastDumpPreview, colors.orange, colors.black, w - 2)
       y = y + 1
     end
     if y <= bottom then
