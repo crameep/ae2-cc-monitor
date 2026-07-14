@@ -899,18 +899,16 @@ end
 local function bottomPageControls(screen, page, y, pageNumber, pageCount)
   local w = mon.getSize()
   pageNumber = math.max(1, math.min(pageNumber, pageCount))
-  local navHeight = 2
-  local buttonW = math.max(10, math.floor((w - 6) / 2))
+  local buttonW = math.max(10, math.floor((w - 18) / 2))
   local prevX = 2
   local nextX = math.max(2, w - buttonW + 1)
   local pageText = tostring(pageNumber) .. "/" .. tostring(pageCount)
 
-  fillRect(1, y, w, navHeight, colors.blue)
+  fillRect(1, y, w, 1, colors.blue)
   writeAt(prevX + math.max(0, math.floor((buttonW - 6) / 2)), y, "< PREV", pageNumber > 1 and colors.white or colors.lightGray, colors.blue, 6)
   writeAt(nextX + math.max(0, math.floor((buttonW - 6) / 2)), y, "NEXT >", pageNumber < pageCount and colors.white or colors.lightGray, colors.blue, 6)
-  writeAt(math.max(1, math.floor((w - #pageText) / 2) + 1), y + 1, pageText, colors.black, colors.yellow, #pageText)
+  writeAt(math.max(1, math.floor((w - #pageText) / 2) + 1), y, pageText, colors.yellow, colors.blue, #pageText)
 
-  if pageNumber > 1 then registerButton(screen, {x = prevX, x2 = prevX + buttonW - 1, y = y, y2 = y + navHeight - 1, action = "page", page = page, delta = -1}) end
-  if pageNumber < pageCount then registerButton(screen, {x = nextX, x2 = nextX + buttonW - 1, y = y, y2 = y + navHeight - 1, action = "page", page = page, delta = 1}) end
+  if pageNumber > 1 then registerButton(screen, {x = prevX, x2 = prevX + buttonW - 1, y = y, action = "page", page = page, delta = -1}) end
+  if pageNumber < pageCount then registerButton(screen, {x = nextX, x2 = nextX + buttonW - 1, y = y, action = "page", page = page, delta = 1}) end
 end
-

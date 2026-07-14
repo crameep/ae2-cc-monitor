@@ -241,19 +241,20 @@ local function renderStock(screen, data, h)
   writeAt(2, headerY, "ATM10 LOW STOCK", colors.black, colors.yellow, w - 2)
   bottomPageControls(screen, "stock", navY, pageNumber, pageCount)
 
-  local ignoreW = 4
+  local ignoreW = 3
   local amountW = w >= 70 and 13 or 10
   local groupW = w >= 70 and 12 or 8
-  local ignoreX = math.max(1, w - ignoreW + 1)
-  local amountX = math.max(1, ignoreX - amountW - 1)
+  local ignoreX = 2
+  local itemX = ignoreX + ignoreW + 1
+  local amountX = math.max(1, w - amountW + 1)
   local groupX = amountX - groupW - 1
-  local itemW = math.max(8, groupX - 3)
+  local itemW = math.max(8, groupX - itemX - 1)
 
   clearLine(columnY, colors.lightGray)
-  writeAt(2, columnY, "ITEM", colors.black, colors.lightGray, itemW)
+  writeAt(ignoreX, columnY, "IGN", colors.black, colors.lightGray, ignoreW)
+  writeAt(itemX, columnY, "ITEM", colors.black, colors.lightGray, itemW)
   writeAt(groupX, columnY, "GROUP", colors.black, colors.lightGray, groupW)
   writeAt(amountX, columnY, "COUNT/TARGET", colors.black, colors.lightGray, amountW)
-  writeAt(ignoreX, columnY, "IGN", colors.black, colors.lightGray, ignoreW)
 
   if #data.lowStock == 0 then
     writeAt(2, firstRowY, "No watched ATM10 bottlenecks are low", colors.lightGray, colors.black, w - 2)
@@ -269,11 +270,11 @@ local function renderStock(screen, data, h)
     local amountColor = ratio <= 0.10 and colors.red or (ratio <= 0.25 and colors.orange or colors.yellow)
     local amountText = fmt(row.amount) .. "/" .. fmt(row.target)
     clearLine(rowY, bg)
-    writeAt(2, rowY, row.name, colors.white, bg, itemW)
+    writeAt(ignoreX, rowY, "IGN", colors.white, colors.gray, ignoreW)
+    writeAt(itemX, rowY, row.name, colors.white, bg, itemW)
     writeAt(groupX, rowY, row.group, colors.lightGray, bg, groupW)
     writeAt(math.max(amountX, w - #amountText + 1), rowY, amountText, amountColor, bg, amountW)
-    writeAt(ignoreX, rowY, "IGN", colors.white, colors.gray, ignoreW)
-    registerButton(screen, {x = ignoreX, x2 = w, y = rowY, action = "ignore", key = row.key, name = row.name})
+    registerButton(screen, {x = ignoreX, x2 = ignoreX + ignoreW - 1, y = rowY, action = "ignore", key = row.key, name = row.name})
     rowY = rowY + 1
   end
 
@@ -705,4 +706,3 @@ local function updatePowerStats(fluxInfo)
   powerStats.lastTime = now
   return powerStats
 end
-

@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.12"
+local VERSION = "2026-07-14.13"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local GITHUB_COMMIT_API = "https://api.github.com/repos/crameep/ae2-cc-monitor/commits/main"
@@ -1837,19 +1837,18 @@ end
 local function bottomPageControls(screen, page, y, pageNumber, pageCount)
   local w = mon.getSize()
   pageNumber = math.max(1, math.min(pageNumber, pageCount))
-  local navHeight = 2
-  local buttonW = math.max(10, math.floor((w - 6) / 2))
+  local buttonW = math.max(10, math.floor((w - 18) / 2))
   local prevX = 2
   local nextX = math.max(2, w - buttonW + 1)
   local pageText = tostring(pageNumber) .. "/" .. tostring(pageCount)
 
-  fillRect(1, y, w, navHeight, colors.blue)
+  fillRect(1, y, w, 1, colors.blue)
   writeAt(prevX + math.max(0, math.floor((buttonW - 6) / 2)), y, "< PREV", pageNumber > 1 and colors.white or colors.lightGray, colors.blue, 6)
   writeAt(nextX + math.max(0, math.floor((buttonW - 6) / 2)), y, "NEXT >", pageNumber < pageCount and colors.white or colors.lightGray, colors.blue, 6)
-  writeAt(math.max(1, math.floor((w - #pageText) / 2) + 1), y + 1, pageText, colors.black, colors.yellow, #pageText)
+  writeAt(math.max(1, math.floor((w - #pageText) / 2) + 1), y, pageText, colors.yellow, colors.blue, #pageText)
 
-  if pageNumber > 1 then registerButton(screen, {x = prevX, x2 = prevX + buttonW - 1, y = y, y2 = y + navHeight - 1, action = "page", page = page, delta = -1}) end
-  if pageNumber < pageCount then registerButton(screen, {x = nextX, x2 = nextX + buttonW - 1, y = y, y2 = y + navHeight - 1, action = "page", page = page, delta = 1}) end
+  if pageNumber > 1 then registerButton(screen, {x = prevX, x2 = prevX + buttonW - 1, y = y, action = "page", page = page, delta = -1}) end
+  if pageNumber < pageCount then registerButton(screen, {x = nextX, x2 = nextX + buttonW - 1, y = y, action = "page", page = page, delta = 1}) end
 end
 
 local function drawSubtabs(screen, page, active, tabs, y)
@@ -2144,19 +2143,20 @@ local function renderStock(screen, data, h)
   writeAt(2, headerY, "ATM10 LOW STOCK", colors.black, colors.yellow, w - 2)
   bottomPageControls(screen, "stock", navY, pageNumber, pageCount)
 
-  local ignoreW = 4
+  local ignoreW = 3
   local amountW = w >= 70 and 13 or 10
   local groupW = w >= 70 and 12 or 8
-  local ignoreX = math.max(1, w - ignoreW + 1)
-  local amountX = math.max(1, ignoreX - amountW - 1)
+  local ignoreX = 2
+  local itemX = ignoreX + ignoreW + 1
+  local amountX = math.max(1, w - amountW + 1)
   local groupX = amountX - groupW - 1
-  local itemW = math.max(8, groupX - 3)
+  local itemW = math.max(8, groupX - itemX - 1)
 
   clearLine(columnY, colors.lightGray)
-  writeAt(2, columnY, "ITEM", colors.black, colors.lightGray, itemW)
+  writeAt(ignoreX, columnY, "IGN", colors.black, colors.lightGray, ignoreW)
+  writeAt(itemX, columnY, "ITEM", colors.black, colors.lightGray, itemW)
   writeAt(groupX, columnY, "GROUP", colors.black, colors.lightGray, groupW)
   writeAt(amountX, columnY, "COUNT/TARGET", colors.black, colors.lightGray, amountW)
-  writeAt(ignoreX, columnY, "IGN", colors.black, colors.lightGray, ignoreW)
 
   if #data.lowStock == 0 then
     writeAt(2, firstRowY, "No watched ATM10 bottlenecks are low", colors.lightGray, colors.black, w - 2)
@@ -2172,11 +2172,11 @@ local function renderStock(screen, data, h)
     local amountColor = ratio <= 0.10 and colors.red or (ratio <= 0.25 and colors.orange or colors.yellow)
     local amountText = fmt(row.amount) .. "/" .. fmt(row.target)
     clearLine(rowY, bg)
-    writeAt(2, rowY, row.name, colors.white, bg, itemW)
+    writeAt(ignoreX, rowY, "IGN", colors.white, colors.gray, ignoreW)
+    writeAt(itemX, rowY, row.name, colors.white, bg, itemW)
     writeAt(groupX, rowY, row.group, colors.lightGray, bg, groupW)
     writeAt(math.max(amountX, w - #amountText + 1), rowY, amountText, amountColor, bg, amountW)
-    writeAt(ignoreX, rowY, "IGN", colors.white, colors.gray, ignoreW)
-    registerButton(screen, {x = ignoreX, x2 = w, y = rowY, action = "ignore", key = row.key, name = row.name})
+    registerButton(screen, {x = ignoreX, x2 = ignoreX + ignoreW - 1, y = rowY, action = "ignore", key = row.key, name = row.name})
     rowY = rowY + 1
   end
 
