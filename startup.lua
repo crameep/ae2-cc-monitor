@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-13.10"
+local VERSION = "2026-07-13.11"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -339,7 +339,13 @@ local function buildBulkIndex(cells, items)
     end
   end
 
-  return index, bulkCells, matched, autoAvailable, manualBulk, manualInf
+  return index, {
+    bulkCellCount = bulkCells,
+    bulkItemMatches = matched,
+    bulkAutoAvailable = autoAvailable,
+    manualBulkCount = manualBulk,
+    manualInfCount = manualInf
+  }
 end
 
 local function shouldWatchItem(key, label)
@@ -2214,6 +2220,7 @@ local function updatePowerStats(fluxInfo)
   return powerStats
 end
 
+local function mainLoop()
 while true do
   local items = callAnyArg({"listItems", "getItems"}, {}, {}) or {}
   local fluids = callAnyArg({"listFluid", "listFluids", "getFluids"}, {}, {}) or {}
@@ -2229,7 +2236,7 @@ while true do
   enrichTasks(tasks, items, patterns)
 
   local itemTypes, itemCount = 0, 0
-  local bulkIndex, bulkCellCount, bulkItemMatches, bulkAutoAvailable, manualBulkCount, manualInfCount = buildBulkIndex(cells, items)
+  local bulkIndex, bulkStats = buildBulkIndex(cells, items)
   local top = {}
   local lowStock = {}
   for _, item in pairs(items) do
@@ -2365,11 +2372,11 @@ while true do
     fluidPct = fluidPct,
     fluidTypePct = fluidTypePct,
     powerPct = powerPct,
-    bulkCellCount = bulkCellCount,
-    bulkItemMatches = bulkItemMatches,
-    bulkAutoAvailable = bulkAutoAvailable,
-    manualBulkCount = manualBulkCount,
-    manualInfCount = manualInfCount,
+    bulkCellCount = bulkStats.bulkCellCount,
+    bulkItemMatches = bulkStats.bulkItemMatches,
+    bulkAutoAvailable = bulkStats.bulkAutoAvailable,
+    manualBulkCount = bulkStats.manualBulkCount,
+    manualInfCount = bulkStats.manualInfCount,
     nearFullCellCount = nearFullCellCount,
     emptyCellCount = emptyCellCount,
     busyCpuCount = busyCpuCount,
@@ -2397,3 +2404,6 @@ while true do
     end
   end
 end
+end
+
+mainLoop()
