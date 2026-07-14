@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.3"
+local VERSION = "2026-07-14.4"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -752,6 +752,7 @@ local statusMessage = nil
 local statusUntil = 0
 local setStatus
 local toolBusy = false
+local diagnosticRequested = false
 local lastPasteUrl = nil
 local lastPasteError = nil
 local lastDumpSize = 0
@@ -902,10 +903,57 @@ local function loadPastebinKey()
   return key
 end
 
+local function pastebinUrlFromOutput(output)
+  output = tostring(output or "")
+  local url = string.match(output, "https?://pastebin%.com/raw/[%w]+")
+    or string.match(output, "https?://pastebin%.com/[%w]+")
+  if url then return string.gsub(url, "/raw/", "/") end
+  local code = string.match(output, "pastebin%.com/([%w]+)")
+    or string.match(output, "Uploaded as%s+([%w]+)")
+    or string.match(output, "uploaded as%s+([%w]+)")
+  if code then return "https://pastebin.com/" .. code end
+  return nil
+end
+
+local function uploadDumpWithPastebinProgram()
+  if not shell or not shell.run then return nil, "shell.run unavailable" end
+  if not term or not term.redirect or not term.current then return nil, "term redirect unavailable" end
+
+  local oldTerm = term.current()
+  local output = {}
+  local capture = {}
+  function capture.write(text) output[#output + 1] = tostring(text or "") end
+  function capture.blit(text) output[#output + 1] = tostring(text or "") end
+  function capture.clear() end
+  function capture.clearLine() end
+  function capture.scroll() end
+  function capture.setCursorPos() end
+  function capture.setCursorBlink() end
+  function capture.setTextColor() end
+  function capture.setBackgroundColor() end
+  function capture.getCursorPos() return 1, 1 end
+  function capture.getSize() return 80, 24 end
+  function capture.isColor() return false end
+  function capture.isColour() return false end
+  function capture.getTextColor() return colors.white end
+  function capture.getTextColour() return colors.white end
+  function capture.getBackgroundColor() return colors.black end
+  function capture.getBackgroundColour() return colors.black end
+
+  local redirected = pcall(term.redirect, capture)
+  local ran, result = pcall(shell.run, "pastebin", "put", DUMP_FILE)
+  if redirected then pcall(term.redirect, oldTerm) end
+
+  local text = table.concat(output)
+  local url = pastebinUrlFromOutput(text)
+  if ran and result ~= false and url then return url end
+  if url then return url end
+  if text ~= "" then return nil, text end
+  return nil, ran and "pastebin put failed" or tostring(result)
+end
+
 local function uploadDumpToPastebin()
-  if not http or not http.post then return nil, "HTTP POST is disabled" end
   local pastebinKey = loadPastebinKey()
-  if not pastebinKey then return nil, "Missing " .. PASTEBIN_KEY_FILE end
   if not fs.exists(DUMP_FILE) or fs.isDir(DUMP_FILE) then return nil, "Diagnostic file was not created" end
   local h = fs.open(DUMP_FILE, "r")
   if not h then return nil, "Cannot read " .. DUMP_FILE end
@@ -914,21 +962,34 @@ local function uploadDumpToPastebin()
   lastDumpSize = #body
   if #body < 100 then return nil, "Diagnostic file is empty" end
 
-  local response, err = http.post(
-    "https://pastebin.com/api/api_post.php",
-    "api_option=paste&" ..
-    "api_dev_key=" .. textutils.urlEncode(pastebinKey) .. "&" ..
-    "api_paste_format=javascript&" ..
-    "api_paste_name=" .. textutils.urlEncode("AE2 diagnostic " .. tostring(os.getComputerID())) .. "&" ..
-    "api_paste_code=" .. textutils.urlEncode(body)
-  )
-  if not response then return nil, err or "Pastebin upload failed" end
-  local result = response.readAll()
-  response.close()
-  if not result or not string.match(result, "^https?://pastebin%.com/[%a%d]+$") then
-    return nil, result or "Pastebin returned no link"
+  local apiError = nil
+  if pastebinKey and http and http.post then
+    local response, err = http.post(
+      "https://pastebin.com/api/api_post.php",
+      "api_option=paste&" ..
+      "api_dev_key=" .. textutils.urlEncode(pastebinKey) .. "&" ..
+      "api_paste_format=javascript&" ..
+      "api_paste_name=" .. textutils.urlEncode("AE2 diagnostic " .. tostring(os.getComputerID())) .. "&" ..
+      "api_paste_code=" .. textutils.urlEncode(body)
+    )
+    if response then
+      local result = response.readAll()
+      response.close()
+      if result and string.match(result, "^https?://pastebin%.com/[%a%d]+$") then
+        return result
+      end
+      apiError = result or "Pastebin returned no link"
+    else
+      apiError = err or "Pastebin API upload failed"
+    end
+  elseif pastebinKey then
+    apiError = "HTTP POST is disabled"
   end
-  return result
+
+  local url, fallbackError = uploadDumpWithPastebinProgram()
+  if url then return url end
+  if apiError then return nil, apiError .. " | pastebin program: " .. tostring(fallbackError) end
+  return nil, tostring(fallbackError or ("Missing " .. PASTEBIN_KEY_FILE))
 end
 
 local function runDiagnosticUpload()
@@ -1011,7 +1072,12 @@ local function handleTouch(screen, x, y)
       elseif button.action == "update" then
         return runUpdater()
       elseif button.action == "diagnostic" then
-        return runDiagnosticUpload()
+        if toolBusy or diagnosticRequested then
+          setStatus("Diagnostic already running", 30)
+        else
+          diagnosticRequested = true
+          setStatus("Diagnostic queued...", 30)
+        end
       end
       return true
     end
@@ -2096,12 +2162,13 @@ local function renderTools(screen, data, h)
   writeAt(2, y, "AE2 DIAGNOSTIC", colors.black, colors.lightGray, w - 2)
   y = y + 2
 
-  local buttonText = toolBusy and " DIAGNOSTIC RUNNING... " or " CREATE + UPLOAD AE2 DUMP "
+  local busy = toolBusy or diagnosticRequested
+  local buttonText = busy and " DIAGNOSTIC RUNNING... " or " CREATE + UPLOAD AE2 DUMP "
   local buttonWidth = math.min(w - 4, #buttonText + 4)
   local buttonX = math.max(2, math.floor((w - buttonWidth) / 2) + 1)
-  fillRect(buttonX, y, buttonWidth, 3, toolBusy and colors.gray or colors.blue)
-  centerText(y + 1, buttonText, colors.white, toolBusy and colors.gray or colors.blue, buttonWidth)
-  if not toolBusy then
+  fillRect(buttonX, y, buttonWidth, 3, busy and colors.gray or colors.blue)
+  centerText(y + 1, buttonText, colors.white, busy and colors.gray or colors.blue, buttonWidth)
+  if not busy then
     registerButton(screen, {x = buttonX, x2 = buttonX + buttonWidth - 1, y = y, y2 = y + 2, action = "diagnostic"})
   end
   y = y + 5
@@ -2400,17 +2467,23 @@ while true do
     renderScreen(target, data)
   end
 
-  local timer = os.startTimer(3)
-  while true do
-    local event, a, b, c = os.pullEvent()
-    if event == "timer" and a == timer then
-      break
-    elseif event == "monitor_touch" and handleTouch(a, b, c) then
-      break
-    elseif event == "mouse_click" and handleTouch("terminal", b, c) then
-      break
-    elseif event == "monitor_resize" then
-      break
+  if diagnosticRequested then
+    diagnosticRequested = false
+    runDiagnosticUpload()
+    if type(sleep) == "function" then sleep(0) end
+  else
+    local timer = os.startTimer(3)
+    while true do
+      local event, a, b, c = os.pullEvent()
+      if event == "timer" and a == timer then
+        break
+      elseif event == "monitor_touch" and handleTouch(a, b, c) then
+        break
+      elseif event == "mouse_click" and handleTouch("terminal", b, c) then
+        break
+      elseif event == "monitor_resize" then
+        break
+      end
     end
   end
 end
