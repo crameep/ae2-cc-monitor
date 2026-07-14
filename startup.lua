@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.9"
+local VERSION = "2026-07-14.10"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/23faa7e/ae2-dump.lua"
@@ -796,6 +796,7 @@ local bulkButtons = {}
 local uiButtons = {}
 local currentPages = {}
 local listPages = {}
+local sectionTabs = {}
 local craftHistory = {}
 local stockCraftHistory = {}
 local patternCache = {}
@@ -890,6 +891,16 @@ end
 local function setListPage(screen, page, delta)
   listPages[screen] = listPages[screen] or {}
   listPages[screen][page] = math.max(1, n(listPages[screen][page] or 1) + delta)
+end
+
+local function getSectionTab(screen, page, fallback)
+  sectionTabs[screen] = sectionTabs[screen] or {}
+  return sectionTabs[screen][page] or fallback
+end
+
+local function setSectionTab(screen, page, tab)
+  sectionTabs[screen] = sectionTabs[screen] or {}
+  sectionTabs[screen][page] = tab
 end
 
 function setStatus(message, seconds)
@@ -1133,6 +1144,8 @@ local function handleTouch(screen, x, y)
         currentPages[screen] = button.page
       elseif button.action == "page" then
         setListPage(screen, button.page, button.delta)
+      elseif button.action == "subtab" then
+        setSectionTab(screen, button.page, button.tab)
       elseif button.action == "ignore" then
         ignoreWarning(button)
       elseif button.action == "bulk" then
@@ -1778,6 +1791,55 @@ local function bottomPageControls(screen, page, y, pageNumber, pageCount)
   if pageNumber < pageCount then registerButton(screen, {x = nextX, x2 = nextX + buttonW - 1, y = y, y2 = y + navHeight - 1, action = "page", page = page, delta = 1}) end
 end
 
+local function drawSubtabs(screen, page, active, tabs, y)
+  local w = mon.getSize()
+  local tabCount = #tabs
+  local tabW = math.max(1, math.floor(w / tabCount))
+  local x = 1
+  for i, tab in ipairs(tabs) do
+    local x2 = i == tabCount and w or math.min(w, x + tabW - 1)
+    local width = math.max(1, x2 - x + 1)
+    local selected = tab.key == active
+    local bg = selected and colors.cyan or colors.gray
+    local fg = selected and colors.black or colors.white
+    fillRect(x, y, width, 1, bg)
+    local label = tab.label
+    if #label > width then label = string.sub(label, 1, width) end
+    writeAt(x + math.max(0, math.floor((width - #label) / 2)), y, label, fg, bg, width)
+    registerButton(screen, {x = x, x2 = x2, y = y, action = "subtab", page = page, tab = tab.key})
+    x = x2 + 1
+  end
+  return y + 1
+end
+
+local function renderFluidRows(screen, pageKey, rows, y, bottom, navY, emptyText)
+  local w = mon.getSize()
+  local rowsAvailable = math.max(1, bottom - y + 1)
+  local pageCount = math.max(1, math.ceil(#rows / rowsAvailable))
+  listPages[screen] = listPages[screen] or {}
+  local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen][pageKey] or 1)))
+  listPages[screen][pageKey] = pageNumber
+  bottomPageControls(screen, pageKey, navY, pageNumber, pageCount)
+
+  if #rows == 0 then
+    writeAt(2, y, emptyText or "No fluids reported", colors.lightGray, colors.black, w - 2)
+    return
+  end
+
+  local startIndex = ((pageNumber - 1) * rowsAvailable) + 1
+  for i = startIndex, math.min(#rows, startIndex + rowsAvailable - 1) do
+    if y > bottom then break end
+    local fluid = rows[i]
+    local amountText = fmt(fluid.amount)
+    local amountW = math.min(14, math.max(10, #amountText))
+    local bg = (i % 2 == 0) and colors.gray or colors.black
+    clearLine(y, bg)
+    writeAt(2, y, fluid.name, colors.cyan, bg, math.max(8, w - amountW - 3))
+    writeAt(math.max(1, w - amountW + 1), y, amountText, colors.white, bg, amountW)
+    y = y + 1
+  end
+end
+
 local function renderOverview(screen, data, h)
   local w = mon.getSize()
   local bottom = h - 1
@@ -1963,6 +2025,18 @@ local function renderStock(screen, data, h)
   writeAt(2, y, summary, colors.lightGray, colors.black, w - 2)
   y = y + 1
 
+  local activeTab = getSectionTab(screen, "stock", "items")
+  y = drawSubtabs(screen, "stock", activeTab, {
+    {key = "items", label = "ITEM STOCK"},
+    {key = "fluids", label = "FLUID STOCK"}
+  }, y)
+  y = y + 1
+
+  if activeTab == "fluids" then
+    renderFluidRows(screen, "stockFluids", data.topFluids, y, bottom, navY, "No stored fluids reported")
+    return
+  end
+
   local alerts = {}
   for i = 1, math.min(2, #data.warnings) do
     local row = data.warnings[i]
@@ -1999,10 +2073,7 @@ local function renderStock(screen, data, h)
   local headerY = y
   local columnY = y + 1
   local firstRowY = y + 2
-  local totalRowsAvailable = math.max(1, bottom - firstRowY + 1)
-  local fluidRows = #data.topFluids > 0 and math.min(4, math.max(1, math.floor(totalRowsAvailable / 3))) or 0
-  local fluidSectionRows = fluidRows > 0 and (fluidRows + 2) or 0
-  local rowsAvailable = math.max(1, totalRowsAvailable - fluidSectionRows)
+  local rowsAvailable = math.max(1, bottom - firstRowY + 1)
   local pageCount = math.max(1, math.ceil(#data.lowStock / rowsAvailable))
   listPages[screen] = listPages[screen] or {}
   local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen].stock or 1)))
@@ -2048,23 +2119,6 @@ local function renderStock(screen, data, h)
     rowY = rowY + 1
   end
 
-  if fluidRows > 0 and rowY + 1 <= bottom then
-    rowY = rowY + 1
-    clearLine(rowY, colors.cyan)
-    writeAt(2, rowY, "FLUID STOCK", colors.black, colors.cyan, w - 2)
-    rowY = rowY + 1
-    for i = 1, math.min(fluidRows, #data.topFluids) do
-      if rowY > bottom then break end
-      local fluid = data.topFluids[i]
-      local amountText = fmt(fluid.amount)
-      local amountW = math.min(14, math.max(10, #amountText))
-      local bg = (i % 2 == 0) and colors.gray or colors.black
-      clearLine(rowY, bg)
-      writeAt(2, rowY, fluid.name, colors.cyan, bg, math.max(8, w - amountW - 3))
-      writeAt(math.max(1, w - amountW + 1), rowY, amountText, colors.white, bg, amountW)
-      rowY = rowY + 1
-    end
-  end
 end
 
 local function renderStorage(screen, data, h)
@@ -2072,11 +2126,23 @@ local function renderStorage(screen, data, h)
   local navY = h - 2
   local bottom = h - 3
   local y = 3
+  local activeTab = getSectionTab(screen, "storage", "items")
+  y = drawSubtabs(screen, "storage", activeTab, {
+    {key = "items", label = "ITEM STORAGE"},
+    {key = "fluids", label = "FLUID STORAGE"}
+  }, y)
+  y = y + 1
+
+  if activeTab == "fluids" then
+    clearLine(y, colors.black)
+    writeAt(2, y, data.fluidTypes .. " fluid types  |  " .. fmt(data.fluidUsed) .. "/" .. (data.fluidTotal > 0 and fmt(data.fluidTotal) or "?") .. " bytes", colors.lightGray, colors.black, w - 2)
+    y = y + 2
+    renderFluidRows(screen, "storageFluids", data.topFluids, y, bottom, navY, "No stored fluids reported")
+    return
+  end
+
   local headerRows = 2
-  local totalRowsAvailable = math.max(1, bottom - (y + headerRows) + 1)
-  local fluidRows = #data.topFluids > 0 and math.min(5, math.max(1, math.floor(totalRowsAvailable / 3))) or 0
-  local fluidSectionRows = fluidRows > 0 and (fluidRows + 2) or 0
-  local rowsAvailable = math.max(1, totalRowsAvailable - fluidSectionRows)
+  local rowsAvailable = math.max(1, bottom - (y + headerRows) + 1)
   local pageCount = math.max(1, math.ceil(#data.top / rowsAvailable))
   listPages[screen] = listPages[screen] or {}
   local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen].storage or 1)))
@@ -2122,23 +2188,6 @@ local function renderStorage(screen, data, h)
     y = y + 1
   end
 
-  if fluidRows > 0 and y + 1 <= bottom then
-    y = y + 1
-    clearLine(y, colors.cyan)
-    writeAt(2, y, "FLUID STORAGE", colors.black, colors.cyan, w - 2)
-    y = y + 1
-    for i = 1, math.min(fluidRows, #data.topFluids) do
-      if y > bottom then break end
-      local fluid = data.topFluids[i]
-      local amountText = fmt(fluid.amount)
-      local amountW2 = math.min(14, math.max(10, #amountText))
-      local bg = (i % 2 == 0) and colors.gray or colors.black
-      clearLine(y, bg)
-      writeAt(2, y, fluid.name, colors.cyan, bg, math.max(8, w - amountW2 - 3))
-      writeAt(math.max(1, w - amountW2 + 1), y, amountText, colors.white, bg, amountW2)
-      y = y + 1
-    end
-  end
 end
 
 local function renderMovers(screen, data, h)
@@ -2146,21 +2195,28 @@ local function renderMovers(screen, data, h)
   local navY = h - 2
   local bottom = h - 3
   local y = 3
-  local totalRowsAvailable = math.max(1, bottom - (y + 2) + 1)
-  local fluidRows = #data.fluidMovers > 0 and math.min(4, math.max(1, math.floor(totalRowsAvailable / 3))) or 0
-  local fluidSectionRows = fluidRows > 0 and (fluidRows + 2) or 0
-  local rowsAvailable = math.max(1, totalRowsAvailable - fluidSectionRows)
-  local pageCount = math.max(1, math.ceil(#data.movers / rowsAvailable))
-  listPages[screen] = listPages[screen] or {}
-  local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen].movers or 1)))
-  listPages[screen].movers = pageNumber
 
   clearLine(y, colors.black)
   local summary = #data.movers .. " changing item type" .. (#data.movers == 1 and "" or "s")
     .. "  |  " .. #data.fluidMovers .. " changing fluid" .. (#data.fluidMovers == 1 and "" or "s")
   writeAt(2, y, summary .. "  |  sampled every " .. SAMPLE_SECONDS .. "s", colors.lightGray, colors.black, w - 2)
-  bottomPageControls(screen, "movers", navY, pageNumber, pageCount)
   y = y + 1
+
+  local activeTab = getSectionTab(screen, "movers", "items")
+  y = drawSubtabs(screen, "movers", activeTab, {
+    {key = "items", label = "ITEM MOVEMENT"},
+    {key = "fluids", label = "FLUID MOVEMENT"}
+  }, y)
+  y = y + 1
+
+  local rows = activeTab == "fluids" and data.fluidMovers or data.movers
+  local pageKey = activeTab == "fluids" and "fluidMovers" or "movers"
+  local rowsAvailable = math.max(1, bottom - (y + 1) + 1)
+  local pageCount = math.max(1, math.ceil(#rows / rowsAvailable))
+  listPages[screen] = listPages[screen] or {}
+  local pageNumber = math.min(pageCount, math.max(1, n(listPages[screen][pageKey] or 1)))
+  listPages[screen][pageKey] = pageNumber
+  bottomPageControls(screen, pageKey, navY, pageNumber, pageCount)
 
   local nowW = w >= 72 and 10 or 0
   local hourW = w >= 58 and 10 or 8
@@ -2173,22 +2229,23 @@ local function renderMovers(screen, data, h)
   local itemW = math.max(8, deltaX - 3)
 
   clearLine(y, colors.lightGray)
-  writeAt(2, y, "ITEM", colors.black, colors.lightGray, itemW)
+  writeAt(2, y, activeTab == "fluids" and "FLUID" or "ITEM", colors.black, colors.lightGray, itemW)
   writeAt(deltaX, y, "DELTA", colors.black, colors.lightGray, deltaW)
   writeAt(minX, y, "/MIN", colors.black, colors.lightGray, minW)
   writeAt(hourX, y, "/HR", colors.black, colors.lightGray, hourW)
   if nowX then writeAt(nowX, y, "NOW", colors.black, colors.lightGray, nowW) end
   y = y + 1
 
-  if #data.movers == 0 then
-    writeAt(2, y, "No item movement in the current sample window", colors.lightGray, colors.black, w - 2)
-    y = y + 1
+  if #rows == 0 then
+    local emptyText = activeTab == "fluids" and "No fluid movement in the current sample window" or "No item movement in the current sample window"
+    writeAt(2, y, emptyText, colors.lightGray, colors.black, w - 2)
+    return
   end
 
   local startIndex = ((pageNumber - 1) * rowsAvailable) + 1
-  for i = startIndex, math.min(#data.movers, startIndex + rowsAvailable - 1) do
+  for i = startIndex, math.min(#rows, startIndex + rowsAvailable - 1) do
     if y > bottom then break end
-    local row = data.movers[i]
+    local row = rows[i]
     local bg = (i % 2 == 0) and colors.gray or colors.black
     local movementColor = n(row.delta) < 0 and colors.orange or colors.lime
     local deltaText = signedFmt(row.delta)
@@ -2202,27 +2259,6 @@ local function renderMovers(screen, data, h)
     writeAt(math.max(hourX, hourX + hourW - #hourText), y, hourText, movementColor, bg, hourW)
     if nowX then writeAt(math.max(nowX, nowX + nowW - #nowText), y, nowText, colors.lightGray, bg, nowW) end
     y = y + 1
-  end
-
-  if fluidRows > 0 and y + 1 <= bottom then
-    y = y + 1
-    clearLine(y, colors.cyan)
-    writeAt(2, y, "FLUID MOVEMENT", colors.black, colors.cyan, w - 2)
-    y = y + 1
-    for i = 1, math.min(fluidRows, #data.fluidMovers) do
-      if y > bottom then break end
-      local row = data.fluidMovers[i]
-      local bg = (i % 2 == 0) and colors.gray or colors.black
-      local movementColor = n(row.delta) < 0 and colors.orange or colors.lime
-      local deltaText = signedFmt(row.delta)
-      local minText = rateFmt(row.perMinute, "/m")
-      local nowText = fmt(row.amount)
-      local rightText = deltaText .. "  " .. minText .. "  now " .. nowText
-      clearLine(y, bg)
-      writeAt(2, y, row.name, colors.cyan, bg, math.max(8, w - #rightText - 3))
-      writeAt(math.max(1, w - #rightText + 1), y, rightText, movementColor, bg, #rightText)
-      y = y + 1
-    end
   end
 end
 
