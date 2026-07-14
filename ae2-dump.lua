@@ -500,14 +500,17 @@ local function runDump()
     local types = peripheralTypes(name)
     local methods = peripheral.getMethods(name) or {}
     table.sort(methods)
+    local isBridge = contains(types, "me_bridge")
     dump.peripherals[#dump.peripherals + 1] = {
       name = name,
       types = types,
       methods = methods,
       methodCount = #methods,
-      readOnlyResults = capturePeripheralReadOnly(name, methods)
+      readOnlyResults = isBridge
+        and {__skipped = "Captured in bridges[] to avoid duplicating large ME inventory payloads."}
+        or capturePeripheralReadOnly(name, methods)
     }
-    if contains(types, "me_bridge") then
+    if isBridge then
       bridgeRefs[#bridgeRefs + 1] = {name = name, methods = methods, types = types}
     end
     checkpoint()
@@ -611,6 +614,34 @@ local function runDump()
         __removed = "Removed to fit output budget",
         methodCount = #(bridgeDump.methods or {})
       }
+    end
+    encoded = serializeJson(dump)
+  end
+  if #encoded > outputBudget then
+    dump.meta.truncatedPeripheralReadOnlyResults = true
+    dump.meta.truncatedReason = "Encoded JSON exceeded output budget; peripheral readOnlyResults were also removed."
+    for _, peripheralDump in ipairs(dump.peripherals) do
+      peripheralDump.readOnlyResults = {
+        __removed = "Removed to fit output budget",
+        methodCount = #(peripheralDump.methods or {})
+      }
+    end
+    encoded = serializeJson(dump)
+  end
+  if #encoded > outputBudget then
+    dump.meta.truncatedTargetedProbeDetails = true
+    dump.meta.truncatedReason = "Encoded JSON exceeded output budget; targeted probe returned values were summarized."
+    for _, bridgeDump in ipairs(dump.bridges) do
+      for _, probe in ipairs(bridgeDump.targetedProbes or {}) do
+        if probe.result then
+          probe.result = {
+            ok = probe.result.ok,
+            summary = probe.result.summary,
+            error = probe.result.error,
+            removed = "Returned values removed to fit output budget"
+          }
+        end
+      end
     end
     encoded = serializeJson(dump)
   end
