@@ -89,9 +89,9 @@ One connected monitor wall is exposed by CC:Tweaked as one large monitor. Separa
 
 ## Infinity / Bulk Cell Markers
 
-The Storage page shows `INF` when the script can associate an item with an infinity/bulk-backed storage source. Auto-detection depends on the information returned by Advanced Peripherals and may not identify the partitioned item on every pack version.
+The Storage page marks cell-handled items in the `CELL` column. `BULK` means bulk-cell handled; `INF` means infinity-cell handled and is drawn purple on the monitor. Auto-detection depends on the information returned by Advanced Peripherals and may not identify the partitioned item on every pack version.
 
-Tap `INF+` to manually mark an item as infinity/bulk-backed. Tap `INF` to remove the manual marker. Manual markers persist in `.ae2_bulk_items`.
+Tap the cell marker to cycle `BULK+` -> `BULK` -> `INF` -> normal. Manual markers persist in `.ae2_bulk_items`. Older plain entries in that file are treated as `INF` so existing infinity markers survive upgrades.
 
 You can also edit the file directly:
 
@@ -102,9 +102,9 @@ edit .ae2_bulk_items
 Example:
 
 ```text
-minecraft:cobblestone
-minecraft:netherrack
-iron ingot
+bulk minecraft:cobblestone
+inf minecraft:netherrack
+inf iron ingot
 ```
 
 ## Depletion Warnings
@@ -126,4 +126,4 @@ Some Advanced Peripherals builds expose terminal-started jobs only through a cra
 
 The Crafting page also uses `getPatterns()` to show the immediate recipe inputs for the active output. Stock estimates can under-count outputs that are consumed immediately by parent recipes, or over-count items imported from elsewhere.
 
-When `getDrives()` returns no location data, the System page reports drive data as unavailable and shows the exposed pattern count instead. Automatic infinity/bulk-item association is disabled when cell objects do not expose their configured contents; manual `INF+` markers continue to work.
+When `getDrives()` returns no location data, the System page reports drive data as unavailable and shows the exposed pattern count instead. Automatic infinity/bulk-item association is disabled when cell objects do not expose their configured contents; manual cell markers continue to work.

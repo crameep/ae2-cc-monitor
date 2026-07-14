@@ -25,7 +25,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-13.9"
+local VERSION = "2026-07-13.10"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
@@ -171,8 +171,21 @@ local function loadBulkHints()
     line = string.gsub(line, "^%s+", "")
     line = string.gsub(line, "%s+$", "")
     if line ~= "" then
-      hints[norm(line)] = true
-      hints[line] = true
+      local state = "inf"
+      local key = line
+      local explicitState, explicitKey = string.match(line, "^(%S+)%s+(.+)$")
+      if explicitState and explicitKey then
+        local lowered = string.lower(explicitState)
+        if lowered == "bulk" or lowered == "@bulk" then
+          state = "bulk"
+          key = explicitKey
+        elseif lowered == "inf" or lowered == "@inf" or lowered == "infinity" or lowered == "@infinity" then
+          state = "inf"
+          key = explicitKey
+        end
+      end
+      hints[norm(key)] = state
+      hints[key] = state
     end
   end
   return hints
@@ -203,30 +216,61 @@ local function saveBulkHintLines(lines)
   return true
 end
 
-local function toggleBulkHint(key, label)
+local function parseBulkHintLine(line)
+  local raw = string.gsub(tostring(line or ""), "#.*$", "")
+  raw = string.gsub(raw, "^%s+", "")
+  raw = string.gsub(raw, "%s+$", "")
+  if raw == "" then return nil, nil end
+
+  local state = "inf"
+  local value = raw
+  local explicitState, explicitValue = string.match(raw, "^(%S+)%s+(.+)$")
+  if explicitState and explicitValue then
+    local lowered = string.lower(explicitState)
+    if lowered == "bulk" or lowered == "@bulk" then
+      state = "bulk"
+      value = explicitValue
+    elseif lowered == "inf" or lowered == "@inf" or lowered == "infinity" or lowered == "@infinity" then
+      state = "inf"
+      value = explicitValue
+    end
+  end
+  return state, value
+end
+
+local function cycleBulkHint(key, label, fallbackState)
   key = tostring(key or "")
   label = tostring(label or key)
   local keyNorm = norm(key)
   local labelNorm = norm(label)
   local lines = loadBulkHintLines()
   local kept = {}
-  local removed = false
+  local currentState = nil
 
   for _, line in ipairs(lines) do
-    local raw = string.gsub(line, "#.*$", "")
-    raw = string.gsub(raw, "^%s+", "")
-    raw = string.gsub(raw, "%s+$", "")
-    local rawNorm = norm(raw)
-    if rawNorm ~= "" and (rawNorm == keyNorm or rawNorm == labelNorm) then
-      removed = true
+    local state, value = parseBulkHintLine(line)
+    local valueNorm = norm(value)
+    if valueNorm ~= "" and (valueNorm == keyNorm or valueNorm == labelNorm) then
+      currentState = state or "inf"
     else
       kept[#kept + 1] = line
     end
   end
 
-  if not removed then kept[#kept + 1] = key ~= "" and key or label end
+  local value = key ~= "" and key or label
+  local nextState = nil
+  if currentState == nil and fallbackState == "bulk" then
+    nextState = "inf"
+    kept[#kept + 1] = "inf " .. value
+  elseif currentState == nil then
+    nextState = "bulk"
+    kept[#kept + 1] = "bulk " .. value
+  elseif currentState == "bulk" then
+    nextState = "inf"
+    kept[#kept + 1] = "inf " .. value
+  end
   if not saveBulkHintLines(kept) then return nil end
-  return not removed
+  return nextState or "normal"
 end
 
 local function isBulkCell(cell)
@@ -262,15 +306,19 @@ local function buildBulkIndex(cells, items)
   local index = {}
   local bulkCells = 0
   local matched = 0
+  local manualBulk = 0
+  local manualInf = 0
   local autoAvailable = false
   local hints = loadBulkHints()
 
   for _, item in pairs(items or {}) do
     local key = itemKey(item)
     local label = itemLabel(item)
-    if hints[norm(key)] or hints[key] or hints[norm(label)] then
-      index[key] = "hint"
+    local hintState = hints[norm(key)] or hints[key] or hints[norm(label)]
+    if hintState then
+      index[key] = hintState
       matched = matched + 1
+      if hintState == "inf" then manualInf = manualInf + 1 else manualBulk = manualBulk + 1 end
     end
   end
 
@@ -283,7 +331,7 @@ local function buildBulkIndex(cells, items)
         for _, item in pairs(items or {}) do
           local key = itemKey(item)
           if not index[key] and cellMatchesItem(cellText, item) then
-            index[key] = "auto"
+            index[key] = "bulk"
             matched = matched + 1
           end
         end
@@ -291,7 +339,7 @@ local function buildBulkIndex(cells, items)
     end
   end
 
-  return index, bulkCells, matched, autoAvailable
+  return index, bulkCells, matched, autoAvailable, manualBulk, manualInf
 end
 
 local function shouldWatchItem(key, label)
@@ -929,13 +977,15 @@ local function ignoreWarning(button)
 end
 
 local function toggleBulk(button)
-  local marked = toggleBulkHint(button.key, button.name)
-  if marked == nil then
+  local state = cycleBulkHint(button.key, button.name, button.cellState)
+  if state == nil then
     setStatus("Could not save bulk marker")
-  elseif marked then
+  elseif state == "bulk" then
+    setStatus("Bulk marker added: " .. button.name)
+  elseif state == "inf" then
     setStatus("Infinity marker added: " .. button.name)
   else
-    setStatus("Infinity marker removed: " .. button.name)
+    setStatus("Cell marker cleared: " .. button.name)
   end
 end
 
@@ -1837,7 +1887,7 @@ local function renderStorage(screen, data, h)
   local itemW = math.max(8, markerX - 3)
 
   clearLine(y, colors.black)
-  local bulkText = data.bulkAutoAvailable and (data.bulkItemMatches .. " inf-marked") or (data.bulkItemMatches .. " manual inf | auto unavailable")
+  local bulkText = data.bulkAutoAvailable and (data.bulkItemMatches .. " cell-marked") or (data.manualBulkCount .. " bulk | " .. data.manualInfCount .. " inf | auto unavailable")
   writeAt(2, y, #data.top .. " item types  |  " .. bulkText .. "  |  " .. data.nearFullCellCount .. " cells >95%", colors.lightGray, colors.black, w - 2)
   bottomPageControls(screen, "storage", navY, pageNumber, pageCount)
   y = y + 1
@@ -1858,13 +1908,15 @@ local function renderStorage(screen, data, h)
     if y > bottom then break end
     local row = data.top[i]
     local amountText = fmt(row.amount)
-    local marker = row.bulk and "INF" or "INF+"
-    local rowBg = row.bulk and colors.purple or ((i % 2 == 0) and colors.gray or colors.black)
+    local cellState = row.cellState
+    local marker = cellState == "inf" and "INF" or (cellState == "bulk" and "BULK" or "BULK+")
+    local rowBg = cellState == "inf" and colors.purple or (cellState == "bulk" and colors.green or ((i % 2 == 0) and colors.gray or colors.black))
+    local markerColor = cellState and colors.white or colors.lightGray
     clearLine(y, rowBg)
     local amountCell = string.rep(" ", math.max(0, amountW - #amountText)) .. amountText
     writeAt(2, y, row.name, colors.white, rowBg, itemW)
-    writeAt(markerX, y, marker, row.bulk and colors.white or colors.lightGray, rowBg, markerW)
-    registerButton(screen, {x = markerX, x2 = markerX + markerW - 1, y = y, action = "bulk", key = row.key, name = row.name})
+    writeAt(markerX, y, marker, markerColor, rowBg, markerW)
+    registerButton(screen, {x = markerX, x2 = markerX + markerW - 1, y = y, action = "bulk", key = row.key, name = row.name, cellState = cellState})
     writeAt(amountX, y, amountCell, colors.white, rowBg, amountW)
     y = y + 1
   end
@@ -2177,7 +2229,7 @@ while true do
   enrichTasks(tasks, items, patterns)
 
   local itemTypes, itemCount = 0, 0
-  local bulkIndex, bulkCellCount, bulkItemMatches, bulkAutoAvailable = buildBulkIndex(cells, items)
+  local bulkIndex, bulkCellCount, bulkItemMatches, bulkAutoAvailable, manualBulkCount, manualInfCount = buildBulkIndex(cells, items)
   local top = {}
   local lowStock = {}
   for _, item in pairs(items) do
@@ -2188,7 +2240,7 @@ while true do
       local label = itemLabel(item)
       local key = itemKey(item)
       if shouldWatchItem(key, label) then
-        top[#top + 1] = {key = key, name = label, amount = amount, bulk = bulkIndex[key]}
+        top[#top + 1] = {key = key, name = label, amount = amount, cellState = bulkIndex[key]}
       end
       local stockRule = not usageState.ignored[key] and atm10StockRule(key, label, amount)
       if stockRule then
@@ -2316,6 +2368,8 @@ while true do
     bulkCellCount = bulkCellCount,
     bulkItemMatches = bulkItemMatches,
     bulkAutoAvailable = bulkAutoAvailable,
+    manualBulkCount = manualBulkCount,
+    manualInfCount = manualInfCount,
     nearFullCellCount = nearFullCellCount,
     emptyCellCount = emptyCellCount,
     busyCpuCount = busyCpuCount,
