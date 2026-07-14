@@ -25,10 +25,10 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.6"
+local VERSION = "2026-07-14.7"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
-local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/ae2-dump.lua"
+local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/23faa7e/ae2-dump.lua"
 local DUMP_SCRIPT = "ae2-dump.lua"
 local DUMP_FILE = "ae2-dump.json"
 local LAST_PASTE_FILE = ".ae2_last_paste"
