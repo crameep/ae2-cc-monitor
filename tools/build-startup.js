@@ -14,8 +14,16 @@ if (files.length === 0) {
   throw new Error("No src/*.lua chunks found");
 }
 
+function exposeTopLevelLocals(source) {
+  return source
+    .replace(/^local function ([A-Za-z_][A-Za-z0-9_]*)/gm, "function $1")
+    .replace(/^local ([A-Za-z_][A-Za-z0-9_]*)(\s*=.*)?$/gm, (_, name, rest) => {
+      return rest ? `${name}${rest}` : `${name} = nil`;
+    });
+}
+
 const body = files
-  .map((name) => fs.readFileSync(path.join(srcDir, name), "utf8").replace(/\s*$/g, ""))
+  .map((name) => exposeTopLevelLocals(fs.readFileSync(path.join(srcDir, name), "utf8").replace(/\s*$/g, "")))
   .join("\n\n");
 
 fs.writeFileSync(outFile, body + "\n");

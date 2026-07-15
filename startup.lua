@@ -2,25 +2,25 @@
 -- Requires an Advanced Peripherals ME Bridge on the AE2 network.
 -- Install as startup.lua on the ComputerCraft computer.
 
-local startupArgs = {...}
-local unpackArgs = table.unpack or unpack
-local WIRELESS_PROTOCOL = "ae2-cc-monitor-bridge-v1"
-local WIRELESS_HOST = "ae2-bridge"
-local WIRELESS_TIMEOUT = 8
-local BRIDGE_SERVER_FLAG = ".ae2_bridge_server"
+startupArgs = {...}
+unpackArgs = table.unpack or unpack
+WIRELESS_PROTOCOL = "ae2-cc-monitor-bridge-v1"
+WIRELESS_HOST = "ae2-bridge"
+WIRELESS_TIMEOUT = 8
+BRIDGE_SERVER_FLAG = ".ae2_bridge_server"
 
-local function argEnabled(name)
+function argEnabled(name)
   for _, value in ipairs(startupArgs or {}) do
     if value == name then return true end
   end
   return false
 end
 
-local function packValues(...)
+function packValues(...)
   return {n = select("#", ...), ...}
 end
 
-local function hasPeripheralType(name, wanted)
+function hasPeripheralType(name, wanted)
   local values = packValues(peripheral.getType(name))
   for i = 1, values.n do
     if values[i] == wanted then return true end
@@ -28,7 +28,7 @@ local function hasPeripheralType(name, wanted)
   return false
 end
 
-local function openWirelessModems()
+function openWirelessModems()
   if type(rednet) ~= "table" then return 0 end
   local opened = 0
   for _, name in ipairs(peripheral.getNames()) do
@@ -50,7 +50,7 @@ local function openWirelessModems()
   return opened
 end
 
-local function runWirelessBridgeServer(localBridge)
+function runWirelessBridgeServer(localBridge)
   if not localBridge then error("No local me_bridge found for wireless bridge server.") end
   if openWirelessModems() == 0 then error("No wireless modem found. Attach one to this ME Bridge relay computer.") end
   pcall(rednet.host, WIRELESS_PROTOCOL, WIRELESS_HOST)
@@ -81,7 +81,7 @@ local function runWirelessBridgeServer(localBridge)
   end
 end
 
-local function createWirelessBridgeClient()
+function createWirelessBridgeClient()
   if openWirelessModems() == 0 then return nil, "no wireless modem" end
   local hostId = rednet.lookup(WIRELESS_PROTOCOL, WIRELESS_HOST)
   if not hostId then
@@ -116,8 +116,8 @@ local function createWirelessBridgeClient()
   return proxy, "wireless #" .. tostring(hostId)
 end
 
-local bridge = peripheral.find("me_bridge")
-local BRIDGE_SOURCE_LABEL = "local"
+bridge = peripheral.find("me_bridge")
+BRIDGE_SOURCE_LABEL = "local"
 
 if argEnabled("enable-bridge-server") then
   local flag = fs.open(BRIDGE_SERVER_FLAG, "w")
@@ -145,7 +145,7 @@ if not bridge then
   end
 end
 
-local monitorTargets = {}
+monitorTargets = {}
 for _, name in ipairs(peripheral.getNames()) do
   if peripheral.getType(name) == "monitor" then
     local device = peripheral.wrap(name)
@@ -163,36 +163,36 @@ if #monitorTargets == 0 then
   monitorTargets[1] = {name = "terminal", device = term.current()}
 end
 
-local mon = monitorTargets[1].device
+mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.14"
-local STATE_VERSION = 6
-local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
-local GITHUB_COMMIT_API = "https://api.github.com/repos/crameep/ae2-cc-monitor/commits/main"
-local RAW_BASE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor"
-local MANIFEST_FILE = "version.json"
-local DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/23faa7e/ae2-dump.lua"
-local DUMP_SCRIPT = "ae2-dump.lua"
-local DUMP_FILE = "ae2-dump.json"
-local LAST_PASTE_FILE = ".ae2_last_paste"
-local PASTEBIN_KEY_FILE = ".ae2_pastebin_key"
-local STATE_FILE = ".ae2_usage_state"
-local BULK_HINTS_FILE = ".ae2_bulk_items"
-local SAMPLE_SECONDS = 90
-local WARMUP_SAMPLES = 3
-local MIN_REAL_DROP = 512
-local RECENT_DROP = 64
-local RECENT_EVENTS_REQUIRED = 2
-local RECENT_CONFIRM_SECONDS = 1800
-local CONSUMED_WATCH = 2048
-local DROP_EVENTS_REQUIRED = 2
-local LOW_STOCK = 4096
-local FAST_DROP = 1024
-local HUGE_ITEM_COUNT = 1000000000
-local PATTERN_REFRESH_SECONDS = 30
-local FLUX_FE_PER_BYTE = 1048576
+VERSION = "2026-07-14.15"
+STATE_VERSION = 6
+UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
+GITHUB_COMMIT_API = "https://api.github.com/repos/crameep/ae2-cc-monitor/commits/main"
+RAW_BASE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor"
+MANIFEST_FILE = "version.json"
+DUMP_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/23faa7e/ae2-dump.lua"
+DUMP_SCRIPT = "ae2-dump.lua"
+DUMP_FILE = "ae2-dump.json"
+LAST_PASTE_FILE = ".ae2_last_paste"
+PASTEBIN_KEY_FILE = ".ae2_pastebin_key"
+STATE_FILE = ".ae2_usage_state"
+BULK_HINTS_FILE = ".ae2_bulk_items"
+SAMPLE_SECONDS = 90
+WARMUP_SAMPLES = 3
+MIN_REAL_DROP = 512
+RECENT_DROP = 64
+RECENT_EVENTS_REQUIRED = 2
+RECENT_CONFIRM_SECONDS = 1800
+CONSUMED_WATCH = 2048
+DROP_EVENTS_REQUIRED = 2
+LOW_STOCK = 4096
+FAST_DROP = 1024
+HUGE_ITEM_COUNT = 1000000000
+PATTERN_REFRESH_SECONDS = 30
+FLUX_FE_PER_BYTE = 1048576
 
-local function call(name, default)
+function call(name, default)
   local f = bridge[name]
   if type(f) ~= "function" then return default end
   local ok, result = pcall(f)
@@ -200,7 +200,7 @@ local function call(name, default)
   return default
 end
 
-local function callAny(names, default)
+function callAny(names, default)
   for _, name in ipairs(names) do
     local f = bridge[name]
     if type(f) == "function" then
@@ -211,19 +211,19 @@ local function callAny(names, default)
   return default
 end
 
-local function n(v)
+function n(v)
   if type(v) == "number" then return v end
   if type(v) == "string" then return tonumber(v) or 0 end
   return 0
 end
 
-local function countTable(t)
+function countTable(t)
   local c = 0
   for _ in pairs(t or {}) do c = c + 1 end
   return c
 end
 
-local function fmt(v)
+function fmt(v)
   v = n(v)
   if v >= 1000000000 then return string.format("%.1fB", v / 1000000000) end
   if v >= 1000000 then return string.format("%.1fM", v / 1000000) end
@@ -231,27 +231,27 @@ local function fmt(v)
   return tostring(math.floor(v))
 end
 
-local function pct(used, total)
+function pct(used, total)
   used, total = n(used), n(total)
   if total <= 0 then return 0 end
   return math.max(0, math.min(100, (used / total) * 100))
 end
 
-local function amountOf(item)
+function amountOf(item)
   return n(item.amount or item.count or item.qty)
 end
 
-local function itemKey(item)
+function itemKey(item)
   return tostring(item.name or item.id or item.displayName or "unknown")
 end
 
-local function titleCase(text)
+function titleCase(text)
   return string.gsub(text, "(%a)([%w']*)", function(first, rest)
     return string.upper(first) .. string.lower(rest)
   end)
 end
 
-local function cleanLabel(text)
+function cleanLabel(text)
   text = tostring(text or "unknown")
   text = string.gsub(text, "^%[(.-)%]$", "%1")
   text = string.gsub(text, "^item%.", "")
@@ -269,11 +269,11 @@ local function cleanLabel(text)
   return text
 end
 
-local function itemLabel(item)
+function itemLabel(item)
   return cleanLabel(item.displayName or item.name or item.id or "unknown")
 end
 
-local function norm(text)
+function norm(text)
   text = string.lower(tostring(text or ""))
   text = string.gsub(text, "^item%.", "")
   text = string.gsub(text, "^block%.", "")
@@ -285,7 +285,7 @@ local function norm(text)
   return text
 end
 
-local function gatherText(value, depth)
+function gatherText(value, depth)
   depth = depth or 0
   if depth > 4 then return "" end
   local tv = type(value)
@@ -303,7 +303,7 @@ local function gatherText(value, depth)
   return table.concat(parts, " ")
 end
 
-local function loadBulkHints()
+function loadBulkHints()
   local hints = {}
   if not fs.exists(BULK_HINTS_FILE) then return hints end
   local h = fs.open(BULK_HINTS_FILE, "r")
@@ -335,7 +335,7 @@ local function loadBulkHints()
   return hints
 end
 
-local function loadBulkHintLines()
+function loadBulkHintLines()
   local lines = {}
   if not fs.exists(BULK_HINTS_FILE) then return lines end
   local h = fs.open(BULK_HINTS_FILE, "r")
@@ -350,7 +350,7 @@ local function loadBulkHintLines()
   return lines
 end
 
-local function saveBulkHintLines(lines)
+function saveBulkHintLines(lines)
   local h = fs.open(BULK_HINTS_FILE, "w")
   if not h then return false end
   for _, line in ipairs(lines or {}) do
@@ -360,7 +360,7 @@ local function saveBulkHintLines(lines)
   return true
 end
 
-local function parseBulkHintLine(line)
+function parseBulkHintLine(line)
   local raw = string.gsub(tostring(line or ""), "#.*$", "")
   raw = string.gsub(raw, "^%s+", "")
   raw = string.gsub(raw, "%s+$", "")
@@ -382,7 +382,7 @@ local function parseBulkHintLine(line)
   return state, value
 end
 
-local function cycleBulkHint(key, label, fallbackState)
+function cycleBulkHint(key, label, fallbackState)
   key = tostring(key or "")
   label = tostring(label or key)
   local keyNorm = norm(key)
@@ -417,7 +417,7 @@ local function cycleBulkHint(key, label, fallbackState)
   return nextState or "normal"
 end
 
-local function isBulkCell(cell)
+function isBulkCell(cell)
   local text = norm(gatherText(cell))
   return string.find(text, "bulk", 1, true)
     or string.find(text, "mega item cell", 1, true)
@@ -425,7 +425,7 @@ local function isBulkCell(cell)
     or string.find(text, "megacells:bulk", 1, true)
 end
 
-local function cellMatchesItem(cellText, item)
+function cellMatchesItem(cellText, item)
   local key = itemKey(item)
   local label = itemLabel(item)
   if key ~= "unknown" and string.find(cellText, norm(key), 1, true) then return true end
@@ -437,7 +437,7 @@ local function cellMatchesItem(cellText, item)
   return false
 end
 
-local function cellExposesStoredItem(cell)
+function cellExposesStoredItem(cell)
   if type(cell) ~= "table" then return false end
   local keys = {"storedItem", "partition", "partitionedItem", "filter", "config", "contents", "fingerprint"}
   for _, key in ipairs(keys) do
@@ -446,7 +446,7 @@ local function cellExposesStoredItem(cell)
   return false
 end
 
-local function buildBulkIndex(cells, items)
+function buildBulkIndex(cells, items)
   local index = {}
   local bulkCells = 0
   local matched = 0
@@ -492,7 +492,7 @@ local function buildBulkIndex(cells, items)
   }
 end
 
-local function shouldWatchItem(key, label)
+function shouldWatchItem(key, label)
   local text = string.lower(tostring(label or "") .. " " .. tostring(key or ""))
   if string.find(text, "spatial", 1, true) then return false end
   if string.find(text, "storage cell", 1, true) then return false end
@@ -507,21 +507,21 @@ local function shouldWatchItem(key, label)
   return true
 end
 
-local function containsAny(text, needles)
+function containsAny(text, needles)
   for _, needle in ipairs(needles) do
     if string.find(text, needle, 1, true) then return true end
   end
   return false
 end
 
-local function stockSearchText(key, label)
+function stockSearchText(key, label)
   local path = tostring(key or "")
   path = string.match(path, ":(.+)$") or path
   path = string.gsub(path, "[_%.]+", " ")
   return string.lower(tostring(label or "") .. " " .. path)
 end
 
-local function atm10StockRule(key, label, amount)
+function atm10StockRule(key, label, amount)
   if amount <= 0 then return nil end
   local text = stockSearchText(key, label)
   if not shouldWatchItem(key, label) then return false end
@@ -610,19 +610,19 @@ local function atm10StockRule(key, label, amount)
   return nil
 end
 
-local function set(fg, bg)
+function set(fg, bg)
   mon.setTextColor(fg or colors.white)
   mon.setBackgroundColor(bg or colors.black)
 end
 
-local function clearLine(y, bg)
+function clearLine(y, bg)
   local w = mon.getSize()
   mon.setCursorPos(1, y)
   set(colors.white, bg or colors.black)
   mon.write(string.rep(" ", w))
 end
 
-local function writeAt(x, y, text, fg, bg, maxLen)
+function writeAt(x, y, text, fg, bg, maxLen)
   local w = mon.getSize()
   if x > w then return end
   if maxLen then text = string.sub(text, 1, maxLen) end
@@ -631,7 +631,7 @@ local function writeAt(x, y, text, fg, bg, maxLen)
   mon.write(string.sub(text, 1, math.max(0, w - x + 1)))
 end
 
-local function fillRect(x, y, rw, rh, bg)
+function fillRect(x, y, rw, rh, bg)
   local w, h = mon.getSize()
   set(colors.white, bg)
   for yy = y, math.min(h, y + rh - 1) do
@@ -642,14 +642,14 @@ local function fillRect(x, y, rw, rh, bg)
   end
 end
 
-local function tile(x, y, w, title, value, sub, bg)
+function tile(x, y, w, title, value, sub, bg)
   fillRect(x, y, w, 3, bg)
   writeAt(x + 1, y, title, colors.black, bg, w - 2)
   writeAt(x + 1, y + 1, value, colors.black, bg, w - 2)
   writeAt(x + 1, y + 2, sub, colors.black, bg, w - 2)
 end
 
-local function bar(x, y, w, label, used, total, color)
+function bar(x, y, w, label, used, total, color)
   local p = pct(used, total)
   local sw = mon.getSize()
   local labelW = math.min(20, math.max(10, math.floor(sw * 0.34)))
@@ -664,7 +664,7 @@ local function bar(x, y, w, label, used, total, color)
   writeAt(sw - 3, y, string.format("%3d%%", math.floor(p + 0.5)), colors.white, colors.black, 4)
 end
 
-local function typeSlots(cells)
+function typeSlots(cells)
   local itemCells, fluidCells = 0, 0
   for _, cell in pairs(cells or {}) do
     local info = ""
@@ -683,7 +683,7 @@ local function typeSlots(cells)
   return itemCells * 63, fluidCells * 63, itemCells, fluidCells
 end
 
-local function cellHealth(cells)
+function cellHealth(cells)
   local nearFull, empty = 0, 0
   for _, cell in pairs(cells or {}) do
     local total = n(cell.bytes or cell.capacity)
@@ -696,7 +696,7 @@ local function cellHealth(cells)
   return nearFull, empty
 end
 
-local function cellName(cell)
+function cellName(cell)
   if type(cell) ~= "table" then return "unknown cell" end
   local item = cell.item
   if type(item) == "table" then
@@ -705,7 +705,7 @@ local function cellName(cell)
   return tostring(cell.name or cell.id or cell.type or "unknown cell")
 end
 
-local function summarizeCells(cells)
+function summarizeCells(cells)
   local groupsByKey, groups = {}, {}
   for _, cell in pairs(cells or {}) do
     if type(cell) == "table" then
@@ -734,7 +734,7 @@ local function summarizeCells(cells)
   return groups
 end
 
-local function listCells(cells)
+function listCells(cells)
   local rows = {}
   for index, cell in pairs(cells or {}) do
     if type(cell) == "table" then
@@ -759,7 +759,7 @@ local function listCells(cells)
   return rows
 end
 
-local function topFluids(fluids, limit)
+function topFluids(fluids, limit)
   local rows = {}
   for _, fluid in pairs(fluids or {}) do
     local amount = amountOf(fluid)
@@ -772,7 +772,7 @@ local function topFluids(fluids, limit)
   return rows
 end
 
-local function fluxCellCapacity(cells)
+function fluxCellCapacity(cells)
   local capacity, cellCount, usedEstimate, usedCellCount = 0, 0, 0, 0
   for _, cell in pairs(cells or {}) do
     local text = norm(gatherText(cell))
@@ -794,7 +794,7 @@ local function fluxCellCapacity(cells)
   return capacity, cellCount, usedEstimate, usedCellCount
 end
 
-local function fluxKeyScore(row)
+function fluxKeyScore(row)
   local key = string.lower(itemKey(row))
   local name = string.lower(tostring(row.name or row.id or row.resource or ""))
   local display = norm(tostring(row.displayName or row.label or ""))
@@ -812,7 +812,7 @@ local function fluxKeyScore(row)
   return score
 end
 
-local function findFluxStored(...)
+function findFluxStored(...)
   local best, bestScore = nil, 0
   for i = 1, select("#", ...) do
     local rows = select(i, ...)
@@ -831,7 +831,7 @@ local function findFluxStored(...)
   return nil, nil, 0
 end
 
-local FLUX_PROBE_FILTERS = {
+FLUX_PROBE_FILTERS = {
   {name = "appflux:fe"},
   {id = "appflux:fe"},
   {fingerprint = "appflux:fe"},
@@ -840,9 +840,9 @@ local FLUX_PROBE_FILTERS = {
   {name = "appflux:fe", displayName = "FE"}
 }
 
-local FLUX_PROBE_METHODS = {"getItem", "getChemical", "getFluid", "getAmount"}
+FLUX_PROBE_METHODS = {"getItem", "getChemical", "getFluid", "getAmount"}
 
-local function addFluxProbeResult(rows, method, filter, result)
+function addFluxProbeResult(rows, method, filter, result)
   if result == nil then return end
   if type(result) == "number" and result > 0 then
     rows[#rows + 1] = {name = "appflux:fe", displayName = "FE", amount = result, _source = method, _filter = filter}
@@ -864,7 +864,7 @@ local function addFluxProbeResult(rows, method, filter, result)
   end
 end
 
-local function collectFluxProbeRows()
+function collectFluxProbeRows()
   local rows = {}
   for _, method in ipairs(FLUX_PROBE_METHODS) do
     local f = bridge[method]
@@ -880,7 +880,7 @@ local function collectFluxProbeRows()
   return rows
 end
 
-local function detectFluxEnergy(items, fluids, chemicals, probeRows, cells, bufferStored, bufferCapacity)
+function detectFluxEnergy(items, fluids, chemicals, probeRows, cells, bufferStored, bufferCapacity)
   local capacity, cellCount, usedEstimate, usedCellCount = fluxCellCapacity(cells)
   local stored, label, score = findFluxStored(probeRows, items, fluids, chemicals)
   if stored then
@@ -927,7 +927,7 @@ local function detectFluxEnergy(items, fluids, chemicals, probeRows, cells, buff
   }
 end
 
-local function loadState()
+function loadState()
   if not fs.exists(STATE_FILE) then return {last = {}, tracked = {}, warnings = {}, ignored = {}, stateVersion = STATE_VERSION, lastSample = 0} end
   local h = fs.open(STATE_FILE, "r")
   if not h then return {last = {}, tracked = {}, warnings = {}, ignored = {}, stateVersion = STATE_VERSION, lastSample = 0} end
@@ -951,34 +951,34 @@ local function loadState()
   return {last = {}, tracked = {}, warnings = {}, ignored = {}, stateVersion = STATE_VERSION, lastSample = 0}
 end
 
-local function saveState(state)
+function saveState(state)
   local h = fs.open(STATE_FILE, "w")
   if not h then return end
   h.write(textutils.serialize(state))
   h.close()
 end
 
-local usageState = loadState()
-local warningButtons = {}
-local bulkButtons = {}
-local uiButtons = {}
-local currentPages = {}
-local listPages = {}
-local sectionTabs = {}
-local craftHistory = {}
-local stockCraftHistory = {}
-local patternCache = {}
-local patternCacheTime = 0
-local statusMessage = nil
-local statusUntil = 0
-local setStatus
-local toolBusy = false
-local diagnosticRequested = false
-local lastPasteUrl = nil
-local lastPasteError = nil
-local lastDumpSize = 0
-local lastDumpPreview = nil
-local powerStats = {trendReady = false, netPerSecond = 0, netPerTick = 0, netPerMinute = 0, eta = 0, etaMode = nil}
+usageState = loadState()
+warningButtons = {}
+bulkButtons = {}
+uiButtons = {}
+currentPages = {}
+listPages = {}
+sectionTabs = {}
+craftHistory = {}
+stockCraftHistory = {}
+patternCache = {}
+patternCacheTime = 0
+statusMessage = nil
+statusUntil = 0
+setStatus = nil
+toolBusy = false
+diagnosticRequested = false
+lastPasteUrl = nil
+lastPasteError = nil
+lastDumpSize = 0
+lastDumpPreview = nil
+powerStats = {trendReady = false, netPerSecond = 0, netPerTick = 0, netPerMinute = 0, eta = 0, etaMode = nil}
 
 if fs.exists(LAST_PASTE_FILE) then
   local h = fs.open(LAST_PASTE_FILE, "r")
@@ -989,8 +989,8 @@ if fs.exists(LAST_PASTE_FILE) then
   end
 end
 
-local PAGE_ORDER = {"overview", "crafting", "stock", "storage", "movers", "system", "tools"}
-local PAGE_TITLES = {
+PAGE_ORDER = {"overview", "crafting", "stock", "storage", "movers", "system", "tools"}
+PAGE_TITLES = {
   overview = "OVERVIEW",
   crafting = "CRAFTING",
   stock = "STOCK WATCH",
@@ -1000,11 +1000,11 @@ local PAGE_TITLES = {
   tools = "TOOLS"
 }
 
-local function nowSeconds()
+function nowSeconds()
   return os.epoch and math.floor(os.epoch("utc") / 1000) or os.time()
 end
 
-local function filteredWarnings(warnings)
+function filteredWarnings(warnings)
   local filtered = {}
   for _, warning in ipairs(warnings or {}) do
     if not usageState.ignored[warning.key] then
@@ -1014,7 +1014,7 @@ local function filteredWarnings(warnings)
   return filtered
 end
 
-local function callAnyArg(names, arg, default)
+function callAnyArg(names, arg, default)
   for _, name in ipairs(names or {}) do
     local f = bridge[name]
     if type(f) == "function" then
@@ -1027,7 +1027,7 @@ local function callAnyArg(names, arg, default)
   return default
 end
 
-local function methodValue(object, names, default)
+function methodValue(object, names, default)
   if type(object) ~= "table" then return default end
   for _, name in ipairs(names or {}) do
     local value = object[name]
@@ -1042,7 +1042,7 @@ local function methodValue(object, names, default)
   return default
 end
 
-local function firstField(object, names, default)
+function firstField(object, names, default)
   if type(object) ~= "table" then return default end
   for _, name in ipairs(names or {}) do
     local value = object[name]
@@ -1051,22 +1051,22 @@ local function firstField(object, names, default)
   return default
 end
 
-local function registerButton(screen, button)
+function registerButton(screen, button)
   uiButtons[screen] = uiButtons[screen] or {}
   uiButtons[screen][#uiButtons[screen] + 1] = button
 end
 
-local function setListPage(screen, page, delta)
+function setListPage(screen, page, delta)
   listPages[screen] = listPages[screen] or {}
   listPages[screen][page] = math.max(1, n(listPages[screen][page] or 1) + delta)
 end
 
-local function getSectionTab(screen, page, fallback)
+function getSectionTab(screen, page, fallback)
   sectionTabs[screen] = sectionTabs[screen] or {}
   return sectionTabs[screen][page] or fallback
 end
 
-local function setSectionTab(screen, page, tab)
+function setSectionTab(screen, page, tab)
   sectionTabs[screen] = sectionTabs[screen] or {}
   sectionTabs[screen][page] = tab
 end
@@ -1076,7 +1076,7 @@ function setStatus(message, seconds)
   statusUntil = nowSeconds() + (seconds or 8)
 end
 
-local function runUpdater()
+function runUpdater()
   if not http or not http.get then
     setStatus("HTTP disabled; use wget")
     return true
@@ -1140,7 +1140,7 @@ local function runUpdater()
   return true
 end
 
-local function downloadDumpScript()
+function downloadDumpScript()
   if not http or not http.get then return false, "HTTP is disabled" end
   local url = DUMP_URL .. "?v=" .. tostring(os.epoch and os.epoch("utc") or os.time())
   local res, err = http.get(url)
@@ -1158,7 +1158,7 @@ local function downloadDumpScript()
   return true
 end
 
-local function readDumpPreview()
+function readDumpPreview()
   if not fs.exists(DUMP_FILE) or fs.isDir(DUMP_FILE) then return nil end
   local h = fs.open(DUMP_FILE, "r")
   if not h then return nil end
@@ -1170,7 +1170,7 @@ local function readDumpPreview()
   return string.sub(body, 1, 160)
 end
 
-local function loadPastebinKey()
+function loadPastebinKey()
   if not fs.exists(PASTEBIN_KEY_FILE) then return nil end
   local h = fs.open(PASTEBIN_KEY_FILE, "r")
   if not h then return nil end
@@ -1181,7 +1181,7 @@ local function loadPastebinKey()
   return key
 end
 
-local function pastebinUrlFromOutput(output)
+function pastebinUrlFromOutput(output)
   output = tostring(output or "")
   local url = string.match(output, "https?://pastebin%.com/raw/[%w]+")
     or string.match(output, "https?://pastebin%.com/[%w]+")
@@ -1193,7 +1193,7 @@ local function pastebinUrlFromOutput(output)
   return nil
 end
 
-local function uploadDumpWithPastebinProgram()
+function uploadDumpWithPastebinProgram()
   if not shell or not shell.run then return nil, "shell.run unavailable" end
   if not term or not term.redirect or not term.current then return nil, "term redirect unavailable" end
 
@@ -1230,7 +1230,7 @@ local function uploadDumpWithPastebinProgram()
   return nil, ran and "pastebin put failed" or tostring(result)
 end
 
-local function uploadDumpToPastebin()
+function uploadDumpToPastebin()
   local pastebinKey = loadPastebinKey()
   if not fs.exists(DUMP_FILE) or fs.isDir(DUMP_FILE) then return nil, "Diagnostic file was not created" end
   local h = fs.open(DUMP_FILE, "r")
@@ -1270,7 +1270,7 @@ local function uploadDumpToPastebin()
   return nil, tostring(fallbackError or ("Missing " .. PASTEBIN_KEY_FILE))
 end
 
-local function runDiagnosticUpload()
+function runDiagnosticUpload()
   if toolBusy then
     setStatus("Diagnostic already running")
     return true
@@ -1317,7 +1317,7 @@ local function runDiagnosticUpload()
   return true
 end
 
-local function ignoreWarning(button)
+function ignoreWarning(button)
   usageState.ignored[button.key] = button.name or true
   usageState.tracked[button.key] = nil
   usageState.warnings = filteredWarnings(usageState.warnings)
@@ -1325,7 +1325,7 @@ local function ignoreWarning(button)
   setStatus("Ignored: " .. tostring(button.name or button.key))
 end
 
-local function toggleBulk(button)
+function toggleBulk(button)
   local state = cycleBulkHint(button.key, button.name, button.cellState)
   if state == nil then
     setStatus("Could not save bulk marker")
@@ -1338,7 +1338,7 @@ local function toggleBulk(button)
   end
 end
 
-local function handleTouch(screen, x, y)
+function handleTouch(screen, x, y)
   for _, button in ipairs(uiButtons[screen] or {}) do
     if y >= button.y and y <= (button.y2 or button.y) and x >= button.x and x <= button.x2 then
       if button.action == "nav" then
@@ -1367,7 +1367,7 @@ local function handleTouch(screen, x, y)
   return false
 end
 
-local function updateUsage(items)
+function updateUsage(items)
   local now = nowSeconds()
   if usageState.lastSample and now - usageState.lastSample < SAMPLE_SECONDS then
     usageState.warnings = filteredWarnings(usageState.warnings)
@@ -1495,7 +1495,7 @@ local function updateUsage(items)
   return warnings, recent, movers
 end
 
-local function updateFluidMovers(fluids)
+function updateFluidMovers(fluids)
   local now = nowSeconds()
   usageState.lastFluids = usageState.lastFluids or {}
   if usageState.lastFluidSample and now - usageState.lastFluidSample < SAMPLE_SECONDS then
@@ -1536,7 +1536,7 @@ local function updateFluidMovers(fluids)
   return movers
 end
 
-local function duration(seconds)
+function duration(seconds)
   seconds = math.max(0, math.floor(n(seconds) + 0.5))
   if seconds >= 3600 then
     return string.format("%dh %02dm", math.floor(seconds / 3600), math.floor((seconds % 3600) / 60))
@@ -1546,7 +1546,7 @@ local function duration(seconds)
   return tostring(seconds) .. "s"
 end
 
-local function fmtRate(rate)
+function fmtRate(rate)
   rate = n(rate)
   if rate <= 0 then return "--/s" end
   if rate < 0.1 then return string.format("%.2f/s", rate) end
@@ -1554,7 +1554,7 @@ local function fmtRate(rate)
   return fmt(rate) .. "/s"
 end
 
-local function collectResources(value, out, depth)
+function collectResources(value, out, depth)
   out = out or {}
   depth = depth or 0
   if depth > 3 or type(value) ~= "table" then return out end
@@ -1572,7 +1572,7 @@ local function collectResources(value, out, depth)
   return out
 end
 
-local function resourceSummary(prefix, value, maxItems)
+function resourceSummary(prefix, value, maxItems)
   local rows = collectResources(value, {}, 0)
   table.sort(rows, function(a, b) return a.amount > b.amount end)
   if #rows == 0 then return nil end
@@ -1584,7 +1584,7 @@ local function resourceSummary(prefix, value, maxItems)
   return prefix .. table.concat(parts, ", ")
 end
 
-local function taskDetailObject(task, bridgeId, id)
+function taskDetailObject(task, bridgeId, id)
   if type(task) == "table" and (
     type(task.getUsedItems) == "function" or
     type(task.getEmittedItems) == "function" or
@@ -1606,7 +1606,7 @@ local function taskDetailObject(task, bridgeId, id)
   return task
 end
 
-local function normalizeTask(task, index)
+function normalizeTask(task, index)
   task = type(task) == "table" and task or {}
   local bridgeId = firstField(task, {"bridge_id", "bridgeId"}, -1)
   local id = firstField(task, {"id", "jobId", "taskId"}, nil)
@@ -1707,13 +1707,13 @@ local function normalizeTask(task, index)
   }
 end
 
-local function cpuBusy(cpu)
+function cpuBusy(cpu)
   local value = firstField(cpu, {"isBusy", "busy"}, nil)
   if value ~= nil then return value == true end
   return methodValue(cpu, {"isBusy"}, false) == true
 end
 
-local function normalizeCpus(cpus)
+function normalizeCpus(cpus)
   local normalized = {}
   for _, cpu in pairs(cpus or {}) do
     if type(cpu) == "table" then normalized[#normalized + 1] = cpu end
@@ -1733,7 +1733,7 @@ local function normalizeCpus(cpus)
   return normalized
 end
 
-local function normalizeTasks(tasks, cpus)
+function normalizeTasks(tasks, cpus)
   local sources = {}
   for _, task in pairs(tasks or {}) do
     if type(task) == "table" then sources[#sources + 1] = task end
@@ -1773,7 +1773,7 @@ local function normalizeTasks(tasks, cpus)
   return normalized
 end
 
-local function getPatternCache()
+function getPatternCache()
   local now = nowSeconds()
   if now - patternCacheTime >= PATTERN_REFRESH_SECONDS or next(patternCache) == nil then
     local fresh = call("getPatterns", nil)
@@ -1785,7 +1785,7 @@ local function getPatternCache()
   return patternCache
 end
 
-local function patternIndex(patterns)
+function patternIndex(patterns)
   local index = {}
   for _, pattern in pairs(patterns or {}) do
     local output = type(pattern) == "table" and pattern.primaryOutput or nil
@@ -1799,7 +1799,7 @@ local function patternIndex(patterns)
   return index
 end
 
-local function recipeSummary(task, patternsByOutput)
+function recipeSummary(task, patternsByOutput)
   local pattern = nil
   if task.resourceFingerprint ~= "" then pattern = patternsByOutput["fp:" .. task.resourceFingerprint] end
   if not pattern and task.resourceName ~= "" then pattern = patternsByOutput["name:" .. task.resourceName] end
@@ -1819,7 +1819,7 @@ local function recipeSummary(task, patternsByOutput)
   return "Recipe: " .. table.concat(parts, ", ", 1, math.min(3, #parts))
 end
 
-local function enrichTasks(tasks, items, patterns)
+function enrichTasks(tasks, items, patterns)
   local amountsByName, amountsByFingerprint = {}, {}
   for _, item in pairs(items or {}) do
     local amount = amountOf(item)
@@ -1862,7 +1862,7 @@ local function enrichTasks(tasks, items, patterns)
   end
 end
 
-local function centerText(y, text, fg, bg, maxWidth)
+function centerText(y, text, fg, bg, maxWidth)
   local w = mon.getSize()
   text = tostring(text or "")
   if maxWidth then text = string.sub(text, 1, maxWidth) end
@@ -1870,7 +1870,7 @@ local function centerText(y, text, fg, bg, maxWidth)
   writeAt(x, y, text, fg, bg)
 end
 
-local function meter(x, y, width, ratio, color, emptyColor)
+function meter(x, y, width, ratio, color, emptyColor)
   width = math.max(1, width)
   ratio = math.max(0, math.min(1, n(ratio)))
   local filled = math.floor((width * ratio) + 0.5)
@@ -1878,7 +1878,7 @@ local function meter(x, y, width, ratio, color, emptyColor)
   if filled > 0 then fillRect(x, y, filled, 1, color or colors.green) end
 end
 
-local function capacityRow(y, label, used, total, color)
+function capacityRow(y, label, used, total, color)
   local w = mon.getSize()
   local labelW = math.min(12, math.max(8, math.floor(w * 0.18)))
   local value = fmt(used) .. "/" .. (n(total) > 0 and fmt(total) or "?")
@@ -1891,13 +1891,13 @@ local function capacityRow(y, label, used, total, color)
   writeAt(w - rightW + 1, y, value .. " " .. pctText, colors.white, colors.black, rightW)
 end
 
-local function signedFmt(value)
+function signedFmt(value)
   value = n(value)
   local sign = value >= 0 and "+" or "-"
   return sign .. fmt(math.abs(value))
 end
 
-local function rateFmt(value, suffix)
+function rateFmt(value, suffix)
   value = n(value)
   if value == 0 then return "--" .. suffix end
   local mag = math.abs(value)
@@ -1912,24 +1912,24 @@ local function rateFmt(value, suffix)
   return (value >= 0 and "+" or "-") .. text .. suffix
 end
 
-local function powerTrendText(stats)
+function powerTrendText(stats)
   if stats and not stats.known then return "stored AE hidden" end
   if not stats or not stats.trendReady then return "trend learning" end
   return rateFmt(stats.netPerTick, " AE/t") .. "  " .. rateFmt(stats.netPerMinute, " AE/m")
 end
 
-local function powerEtaText(stats)
+function powerEtaText(stats)
   if not stats or not stats.trendReady or n(stats.eta) <= 0 then return nil end
   if stats.etaMode == "full" then return "Full in " .. duration(stats.eta) end
   if stats.etaMode == "empty" then return "Empty in " .. duration(stats.eta) end
   return nil
 end
 
-local function statusIsActive()
+function statusIsActive()
   return statusMessage and nowSeconds() < statusUntil
 end
 
-local function drawHeader(screen, page, data)
+function drawHeader(screen, page, data)
   local w = mon.getSize()
   clearLine(1, colors.blue)
   writeAt(2, 1, "AE2 // " .. PAGE_TITLES[page], colors.white, colors.blue, math.max(8, w - 18))
@@ -1947,7 +1947,7 @@ local function drawHeader(screen, page, data)
   end
 end
 
-local function drawNav(screen, page, h)
+function drawNav(screen, page, h)
   local w = mon.getSize()
   local labels = w >= 68
     and {"OVERVIEW", "CRAFT", "STOCK", "STORAGE", "MOVERS", "SYSTEM", "TOOLS"}
@@ -1974,7 +1974,7 @@ local function drawNav(screen, page, h)
   end
 end
 
-local function bottomPageControls(screen, page, y, pageNumber, pageCount)
+function bottomPageControls(screen, page, y, pageNumber, pageCount)
   local w = mon.getSize()
   pageNumber = math.max(1, math.min(pageNumber, pageCount))
   local buttonW = math.max(10, math.floor((w - 18) / 2))
@@ -1991,7 +1991,7 @@ local function bottomPageControls(screen, page, y, pageNumber, pageCount)
   if pageNumber < pageCount then registerButton(screen, {x = nextX, x2 = nextX + buttonW - 1, y = y, action = "page", page = page, delta = 1}) end
 end
 
-local function drawSubtabs(screen, page, active, tabs, y)
+function drawSubtabs(screen, page, active, tabs, y)
   local w = mon.getSize()
   local tabCount = #tabs
   local tabW = math.max(1, math.floor(w / tabCount))
@@ -2012,7 +2012,7 @@ local function drawSubtabs(screen, page, active, tabs, y)
   return y + 1
 end
 
-local function renderFluidRows(screen, pageKey, rows, y, bottom, navY, emptyText)
+function renderFluidRows(screen, pageKey, rows, y, bottom, navY, emptyText)
   local w = mon.getSize()
   local rowsAvailable = math.max(1, bottom - y + 1)
   local pageCount = math.max(1, math.ceil(#rows / rowsAvailable))
@@ -2040,7 +2040,7 @@ local function renderFluidRows(screen, pageKey, rows, y, bottom, navY, emptyText
   end
 end
 
-local function renderOverview(screen, data, h)
+function renderOverview(screen, data, h)
   local w = mon.getSize()
   local bottom = h - 1
   local y = 3
@@ -2130,7 +2130,7 @@ local function renderOverview(screen, data, h)
   end
 end
 
-local function renderCrafting(screen, data, h)
+function renderCrafting(screen, data, h)
   local w = mon.getSize()
   local navY = h - 2
   local bottom = h - 3
@@ -2212,7 +2212,7 @@ local function renderCrafting(screen, data, h)
   end
 end
 
-local function renderStock(screen, data, h)
+function renderStock(screen, data, h)
   local w = mon.getSize()
   local navY = h - 2
   local bottom = h - 3
@@ -2322,7 +2322,7 @@ local function renderStock(screen, data, h)
 
 end
 
-local function renderStorage(screen, data, h)
+function renderStorage(screen, data, h)
   local w = mon.getSize()
   local navY = h - 2
   local bottom = h - 3
@@ -2391,7 +2391,7 @@ local function renderStorage(screen, data, h)
 
 end
 
-local function renderMovers(screen, data, h)
+function renderMovers(screen, data, h)
   local w = mon.getSize()
   local navY = h - 2
   local bottom = h - 3
@@ -2463,7 +2463,7 @@ local function renderMovers(screen, data, h)
   end
 end
 
-local function renderSystem(screen, data, h)
+function renderSystem(screen, data, h)
   local w = mon.getSize()
   local footerY = h - 1
   local bottom = h - 2
@@ -2601,7 +2601,7 @@ local function renderSystem(screen, data, h)
   writeAt(2, footerY, "v" .. VERSION .. "  |  bridge " .. BRIDGE_SOURCE_LABEL .. "  |  refresh 3s", colors.lightGray, colors.black, w - 2)
 end
 
-local function renderTools(screen, data, h)
+function renderTools(screen, data, h)
   local w = mon.getSize()
   local bottom = h - 1
   local y = 3
@@ -2668,7 +2668,7 @@ local function renderTools(screen, data, h)
   end
 end
 
-local function renderScreen(target, data)
+function renderScreen(target, data)
   mon = target.device
   local screen = target.name
   local page = currentPages[screen] or "overview"
@@ -2701,7 +2701,7 @@ local function renderScreen(target, data)
   drawNav(screen, page, h)
 end
 
-local function updatePowerStats(fluxInfo)
+function updatePowerStats(fluxInfo)
   local now = nowSeconds()
   local stored = fluxInfo and fluxInfo.stored or nil
   local cap = fluxInfo and n(fluxInfo.capacity) or 0
@@ -2749,7 +2749,7 @@ local function updatePowerStats(fluxInfo)
   return powerStats
 end
 
-local function collectDashboardData()
+function collectDashboardData()
   local d = {}
   d.items = callAnyArg({"listItems", "getItems"}, {}, {}) or {}
   d.fluids = callAnyArg({"listFluid", "listFluids", "getFluids"}, {}, {}) or {}
@@ -2879,7 +2879,7 @@ local function collectDashboardData()
   return d
 end
 
-local function mainLoop()
+function mainLoop()
 while true do
   local data = collectDashboardData()
 

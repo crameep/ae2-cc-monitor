@@ -165,7 +165,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.14"
+local VERSION = "2026-07-14.15"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local GITHUB_COMMIT_API = "https://api.github.com/repos/crameep/ae2-cc-monitor/commits/main"
