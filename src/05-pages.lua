@@ -469,7 +469,7 @@ local function renderSystem(screen, data, h)
       end
     end
     clearLine(footerY, colors.black)
-    writeAt(2, footerY, "v" .. VERSION .. "  |  refresh 3s  |  usage sample " .. SAMPLE_SECONDS .. "s", colors.lightGray, colors.black, w - 2)
+    writeAt(2, footerY, "v" .. VERSION .. "  |  bridge " .. BRIDGE_SOURCE_LABEL .. "  |  refresh 3s", colors.lightGray, colors.black, w - 2)
     return
   end
 
@@ -556,7 +556,7 @@ local function renderSystem(screen, data, h)
   end
 
   clearLine(footerY, colors.black)
-  writeAt(2, footerY, "v" .. VERSION .. "  |  refresh 3s  |  usage sample " .. SAMPLE_SECONDS .. "s", colors.lightGray, colors.black, w - 2)
+  writeAt(2, footerY, "v" .. VERSION .. "  |  bridge " .. BRIDGE_SOURCE_LABEL .. "  |  refresh 3s", colors.lightGray, colors.black, w - 2)
 end
 
 local function renderTools(screen, data, h)

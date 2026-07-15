@@ -2,8 +2,148 @@
 -- Requires an Advanced Peripherals ME Bridge on the AE2 network.
 -- Install as startup.lua on the ComputerCraft computer.
 
+local startupArgs = {...}
+local unpackArgs = table.unpack or unpack
+local WIRELESS_PROTOCOL = "ae2-cc-monitor-bridge-v1"
+local WIRELESS_HOST = "ae2-bridge"
+local WIRELESS_TIMEOUT = 8
+local BRIDGE_SERVER_FLAG = ".ae2_bridge_server"
+
+local function argEnabled(name)
+  for _, value in ipairs(startupArgs or {}) do
+    if value == name then return true end
+  end
+  return false
+end
+
+local function packValues(...)
+  return {n = select("#", ...), ...}
+end
+
+local function hasPeripheralType(name, wanted)
+  local values = packValues(peripheral.getType(name))
+  for i = 1, values.n do
+    if values[i] == wanted then return true end
+  end
+  return false
+end
+
+local function openWirelessModems()
+  if type(rednet) ~= "table" then return 0 end
+  local opened = 0
+  for _, name in ipairs(peripheral.getNames()) do
+    if hasPeripheralType(name, "modem") then
+      local modem = peripheral.wrap(name)
+      local isWireless = false
+      if modem and type(modem.isWireless) == "function" then
+        local ok, result = pcall(modem.isWireless)
+        isWireless = ok and result == true
+      end
+      if isWireless and not rednet.isOpen(name) then
+        local ok = pcall(rednet.open, name)
+        if ok then opened = opened + 1 end
+      elseif isWireless then
+        opened = opened + 1
+      end
+    end
+  end
+  return opened
+end
+
+local function runWirelessBridgeServer(localBridge)
+  if not localBridge then error("No local me_bridge found for wireless bridge server.") end
+  if openWirelessModems() == 0 then error("No wireless modem found. Attach one to this ME Bridge relay computer.") end
+  pcall(rednet.host, WIRELESS_PROTOCOL, WIRELESS_HOST)
+  print("AE2 wireless bridge server " .. WIRELESS_PROTOCOL)
+  print("Hosting as " .. WIRELESS_HOST .. ". Leave this computer running.")
+  while true do
+    local sender, message = rednet.receive(WIRELESS_PROTOCOL)
+    if type(message) == "table" and message.type == "call" and type(message.method) == "string" then
+      local fn = localBridge[message.method]
+      local response = {type = "result", id = message.id}
+      if type(fn) == "function" then
+        local result = packValues(pcall(fn, unpackArgs(message.args or {})))
+        response.ok = result[1] == true
+        if response.ok then
+          response.values = {}
+          for i = 2, result.n do response.values[#response.values + 1] = result[i] end
+        else
+          response.error = tostring(result[2])
+        end
+      else
+        response.ok = false
+        response.error = "ME Bridge method not available: " .. message.method
+      end
+      rednet.send(sender, response, WIRELESS_PROTOCOL)
+    elseif type(message) == "table" and message.type == "ping" then
+      rednet.send(sender, {type = "pong", id = message.id}, WIRELESS_PROTOCOL)
+    end
+  end
+end
+
+local function createWirelessBridgeClient()
+  if openWirelessModems() == 0 then return nil, "no wireless modem" end
+  local hostId = rednet.lookup(WIRELESS_PROTOCOL, WIRELESS_HOST)
+  if not hostId then
+    local pingId = tostring(os.epoch and os.epoch("utc") or os.time()) .. "-" .. tostring(math.random(100000, 999999))
+    rednet.broadcast({type = "ping", id = pingId}, WIRELESS_PROTOCOL)
+    local deadline = os.clock() + 2
+    while os.clock() < deadline and not hostId do
+      local sender, message = rednet.receive(WIRELESS_PROTOCOL, math.max(0.1, deadline - os.clock()))
+      if type(message) == "table" and message.type == "pong" and message.id == pingId then hostId = sender end
+    end
+  end
+  if not hostId then return nil, "no ae2 wireless bridge server found" end
+
+  local proxy = {}
+  setmetatable(proxy, {
+    __index = function(_, method)
+      return function(...)
+        local callId = tostring(os.epoch and os.epoch("utc") or os.time()) .. "-" .. tostring(math.random(100000, 999999))
+        rednet.send(hostId, {type = "call", id = callId, method = method, args = {...}}, WIRELESS_PROTOCOL)
+        local deadline = os.clock() + WIRELESS_TIMEOUT
+        while os.clock() < deadline do
+          local sender, message = rednet.receive(WIRELESS_PROTOCOL, math.max(0.1, deadline - os.clock()))
+          if sender == hostId and type(message) == "table" and message.type == "result" and message.id == callId then
+            if message.ok then return unpackArgs(message.values or {}) end
+            error(message.error or ("wireless ME Bridge call failed: " .. method), 2)
+          end
+        end
+        error("wireless ME Bridge timed out calling " .. method, 2)
+      end
+    end
+  })
+  return proxy, "wireless #" .. tostring(hostId)
+end
+
 local bridge = peripheral.find("me_bridge")
-if not bridge then error("No me_bridge found. Attach an Advanced Peripherals ME Bridge.") end
+local BRIDGE_SOURCE_LABEL = "local"
+
+if argEnabled("enable-bridge-server") then
+  local flag = fs.open(BRIDGE_SERVER_FLAG, "w")
+  if flag then flag.write("enabled\n"); flag.close() end
+  print("Wireless bridge server mode enabled for future boots.")
+end
+
+if argEnabled("disable-bridge-server") then
+  if fs.exists(BRIDGE_SERVER_FLAG) then fs.delete(BRIDGE_SERVER_FLAG) end
+  print("Wireless bridge server mode disabled.")
+end
+
+if argEnabled("--bridge-server") or argEnabled("bridge-server") or fs.exists(BRIDGE_SERVER_FLAG) then
+  runWirelessBridgeServer(bridge)
+  return
+end
+
+if not bridge then
+  local wirelessBridge, sourceOrError = createWirelessBridgeClient()
+  if wirelessBridge then
+    bridge = wirelessBridge
+    BRIDGE_SOURCE_LABEL = sourceOrError
+  else
+    error("No me_bridge found. Attach an Advanced Peripherals ME Bridge, or run this script with 'bridge-server' on a wireless computer attached to the bridge. Wireless error: " .. tostring(sourceOrError))
+  end
+end
 
 local monitorTargets = {}
 for _, name in ipairs(peripheral.getNames()) do
@@ -25,7 +165,7 @@ end
 
 local mon = monitorTargets[1].device
 
-local VERSION = "2026-07-14.13"
+local VERSION = "2026-07-14.14"
 local STATE_VERSION = 6
 local UPDATE_URL = "https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua"
 local GITHUB_COMMIT_API = "https://api.github.com/repos/crameep/ae2-cc-monitor/commits/main"

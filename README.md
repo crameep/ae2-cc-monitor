@@ -4,13 +4,41 @@ A touch-friendly ComputerCraft / CC:Tweaked dashboard for an Applied Energistics
 
 ## Install
 
-Run this on the ComputerCraft computer:
+Run this on the ComputerCraft computer attached to the ME Bridge or wired modem network:
 
 ```lua
 delete startup.lua
 wget https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua startup.lua
 reboot
 ```
+
+## Wireless ME Bridge Mode
+
+Wireless modems do not expose remote peripherals directly, so the dashboard uses a tiny rednet relay.
+
+On the computer touching the Advanced Peripherals ME Bridge:
+
+```lua
+delete startup.lua
+wget https://raw.githubusercontent.com/crameep/ae2-cc-monitor/main/startup.lua startup.lua
+startup enable-bridge-server
+```
+
+Leave that relay computer running. It writes `.ae2_bridge_server`, so future reboots stay in relay mode. The relay hosts `ae2-bridge` on rednet protocol `ae2-cc-monitor-bridge-v1`.
+
+To run relay mode once without saving it:
+
+```lua
+startup bridge-server
+```
+
+To turn relay mode off later:
+
+```lua
+startup disable-bridge-server
+```
+
+On the monitor computer, attach a wireless modem and run the normal dashboard install. If no local `me_bridge` is found, the dashboard opens the wireless modem, finds the relay, and proxies ME Bridge calls through it. The System footer shows `bridge wireless #id` when this is active.
 
 ## Navigation
 

@@ -64,7 +64,7 @@ local function collectDashboardData()
   d.input = callAny({"getAverageEnergyInput", "getAvgPowerInjection"}, 0)
 
   d.fluxInfo = detectFluxEnergy(d.items, d.fluids, d.chemicals, d.fluxProbeRows, d.cells, d.energy, d.energyCap)
-  d.aeEnergyInfo = {stored = d.energy, capacity = d.energyCap, known = d.energyCap > 0, estimated = false, source = "ME bridge AE energy"}
+  d.aeEnergyInfo = {stored = d.energy, capacity = d.energyCap, known = d.energyCap > 0, estimated = false, source = "ME bridge AE energy (" .. BRIDGE_SOURCE_LABEL .. ")"}
   d.powerStats = updatePowerStats(d.aeEnergyInfo)
   d.itemTypeTotal, d.fluidTypeTotal, d.itemCellCount, d.fluidCellCount = typeSlots(d.cells)
   d.cellGroups = summarizeCells(d.cells)
